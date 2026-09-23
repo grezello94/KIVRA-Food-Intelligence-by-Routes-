@@ -12,6 +12,7 @@ public sealed class StorageLocation : Entity { public required string Name { get
 public sealed class User : Entity { public required string DisplayName { get; set; } public required string PinHash { get; set; } public UserRole Role { get; set; } public bool Active { get; set; } = true; }
 public sealed class Item : Entity {
  public required string Name { get; set; } public string? ShortName { get; set; } public Guid CategoryId { get; set; } public Category? Category { get; set; }
+ public string? ImageDataUrl { get; set; }
  public Classification Classification { get; set; } public required string LabelType { get; set; } = "Food"; public required string DateTerminology { get; set; } = "PREPARED";
  public int ShelfLifeValue { get; set; } public ShelfLifeUnit ShelfLifeUnit { get; set; } public Guid? DefaultStorageLocationId { get; set; } public StorageLocation? DefaultStorageLocation { get; set; }
  public string DefaultLabelTemplate { get; set; } = "standard-50x30"; public bool Active { get; set; } = true;

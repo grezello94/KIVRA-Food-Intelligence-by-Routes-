@@ -12,5 +12,7 @@ public static class SchemaCompatibility {
   if(!columns.Contains("PrintSpeedIps"))await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"Printers\" ADD COLUMN \"PrintSpeedIps\" TEXT NOT NULL DEFAULT '3'",ct);
   if(!columns.Contains("PrintDensity"))await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"Printers\" ADD COLUMN \"PrintDensity\" INTEGER NOT NULL DEFAULT 8",ct);
   if(!columns.Contains("UsbQueueName"))await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"Printers\" ADD COLUMN \"UsbQueueName\" TEXT NULL",ct);
+  var itemColumns=new HashSet<string>(StringComparer.OrdinalIgnoreCase);await using(var command=connection.CreateCommand()){command.CommandText="PRAGMA table_info('Items')";await using var reader=await command.ExecuteReaderAsync(ct);while(await reader.ReadAsync(ct))itemColumns.Add(reader.GetString(1));}
+  if(!itemColumns.Contains("ImageDataUrl"))await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"Items\" ADD COLUMN \"ImageDataUrl\" TEXT NULL",ct);
  }
 }

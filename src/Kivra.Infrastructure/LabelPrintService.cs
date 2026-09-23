@@ -9,8 +9,9 @@ public sealed class LabelPrintService(KivraDbContext db, IExpiryCalculator expir
   if (existing is not null) return new(existing.LabelId, existing.Label!.LabelCode, existing.Id, existing.Status, existing.FailureReason, true);
   var item = await db.Items.Include(x => x.Category).Include(x => x.DefaultStorageLocation).SingleOrDefaultAsync(x => x.Id == request.ItemId && x.Active, ct) ?? throw new KeyNotFoundException("Active item was not found.");
   var printer = await db.Printers.SingleOrDefaultAsync(x => x.Id == request.PrinterId && x.Enabled, ct) ?? throw new KeyNotFoundException("Enabled printer was not found.");
-  var location = request.StorageLocationId is null ? item.DefaultStorageLocation : await db.StorageLocations.SingleOrDefaultAsync(x => x.Id == request.StorageLocationId && x.Active, ct);
-  if (location is null) throw new InvalidOperationException("A storage location is required for this label.");
+  var locationId = request.StorageLocationId ?? item.DefaultStorageLocationId;
+  var location = locationId is null ? null : await db.StorageLocations.SingleOrDefaultAsync(x => x.Id == locationId && x.Active, ct);
+  if (location is null) throw new InvalidOperationException("Select an active storage location before printing.");
   var operational = request.OperationalDateTime ?? DateTimeOffset.UtcNow;
   var local = TimeZoneInfo.ConvertTime(operational, restaurantTimeZone); var todayStart = new DateTimeOffset(local.Year, local.Month, local.Day, 0, 0, 0, local.Offset); var createdDates=await db.Labels.Select(x=>x.CreatedAt).ToListAsync(ct); var sequence=createdDates.Count(x=>x>=todayStart.ToUniversalTime())+1;
   var label = new Label { LabelCode = codes.Next(local, sequence), ItemId = item.Id, ItemNameSnapshot = item.Name, CategorySnapshot = item.Category?.Name ?? "Uncategorized", ClassificationSnapshot = item.Classification, DateTerminologySnapshot = item.DateTerminology, OperationalDateTime = operational, ExpiryDateTime = expiry.Calculate(operational, item.ShelfLifeValue, item.ShelfLifeUnit, restaurantTimeZone), ShelfLifeRuleSnapshot = $"{item.ShelfLifeValue} {item.ShelfLifeUnit}", StorageLocationId = location.Id, StorageLocationSnapshot = location.Name, Quantity = request.Quantity, Unit = request.Unit, CreatedByUserId = request.RequestedByUserId, PrinterId = printer.Id };
