@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#091117">
+  <meta name="description" content="KIVRA restaurant kitchen food-label intelligence">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/printer.css">
+  <link rel="stylesheet" href="/visual-refresh.css">
+  <title>KIVRA Kitchen Labels</title>
+</head>
+<body>
+  <div id="app" class="app-shell" aria-live="polite"></div>
+  <div id="toast" class="toast" role="status"></div>
+  <dialog id="loginDialog" class="login-dialog">
+    <form id="loginForm">
+      <div class="brand-lockup"><span class="brand-mark">K</span><div><b>KIVRA</b><small>Food Intelligence by Routes</small></div></div>
+      <h1>Kitchen sign in</h1>
+      <p>Enter your employee PIN to continue.</p>
+      <label>Employee PIN<input id="pin" type="password" inputmode="numeric" autocomplete="current-password" maxlength="12" placeholder="••••" required></label>
+      <p id="loginError" class="form-error" hidden></p>
+      <button class="btn btn-primary btn-block" type="submit">Sign in</button>
+    </form>
+  </dialog>
+  <script src="/app.js"></script>
+</body>
+</html>
