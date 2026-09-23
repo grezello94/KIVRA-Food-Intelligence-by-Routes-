@@ -6,7 +6,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 namespace Kivra.Infrastructure;
 public sealed class PrinterOperations(KivraDbContext db, IEnumerable<ILabelPrinter> printers, ITsplGenerator tspl, TimeZoneInfo tz) {
- ILabelPrinter Resolve(Printer p)=>printers.FirstOrDefault(x=>p.Driver switch{"TscTsplNetwork"=>x is TscTsplNetworkPrinter,"TscTsplUsb"=>x is TscTsplUsbPrinter,_=>x is FakeLabelPrinter})??throw new InvalidOperationException($"Printer driver '{p.Driver}' is not registered.");
+ ILabelPrinter Resolve(Printer p)=>printers.FirstOrDefault(x=>p.Driver switch{"TscTsplNetwork"=>x is TscTsplNetworkPrinter,"TscTsplUsb"=>x is TscTsplUsbPrinter,"EpsonEscPosUsb"=>x is EpsonEscPosUsbPrinter,_=>x is FakeLabelPrinter})??throw new InvalidOperationException($"Printer driver '{p.Driver}' is not registered.");
  public Task<PrinterResult> TestAsync(Guid printerId,CancellationToken ct) => TestCore(printerId,ct);
  async Task<PrinterResult> TestCore(Guid id,CancellationToken ct) { var p=await db.Printers.FindAsync([id],ct)??throw new KeyNotFoundException("Printer not found."); return await Resolve(p).TestConnectionAsync(p,ct); }
  public async Task<PrinterResult> TestPrintAsync(Guid printerId,CancellationToken ct) { var p=await db.Printers.FindAsync([printerId],ct)??throw new KeyNotFoundException("Printer not found."); var sample=new Label { LabelCode="TEST-0001",ItemNameSnapshot="KIVRA TEST LABEL",CategorySnapshot="System",ClassificationSnapshot=Classification.NotApplicable,DateTerminologySnapshot="TESTED",OperationalDateTime=DateTimeOffset.UtcNow,ExpiryDateTime=DateTimeOffset.UtcNow,ShelfLifeRuleSnapshot="Test",StorageLocationSnapshot="PRINTER TEST" }; return await Resolve(p).PrintAsync(p,tspl.Generate(sample,p,tz),ct); }
