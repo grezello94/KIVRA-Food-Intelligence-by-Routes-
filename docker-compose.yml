@@ -21,5 +21,6 @@ services:
       Database__Provider: ${DATABASE_PROVIDER:?Set DATABASE_PROVIDER in .env}
       ConnectionStrings__Default: Host=postgres;Port=5432;Database=${POSTGRES_DB:?Set POSTGRES_DB in .env};Username=${POSTGRES_USER:?Set POSTGRES_USER in .env};Password=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       Bootstrap__AdminPin: ${BOOTSTRAP_ADMIN_PIN:?Set BOOTSTRAP_ADMIN_PIN in .env}
+      PrinterDiscovery__Networks: ${PRINTER_DISCOVERY_NETWORKS:-}
 volumes:
   postgres-data:

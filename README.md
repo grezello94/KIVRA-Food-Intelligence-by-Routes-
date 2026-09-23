@@ -20,6 +20,14 @@ Copy `.env.example` to `.env`, replace every placeholder with deployment-specifi
 - The expiry worker runs every five minutes and changes active past-due labels to `Expired`, preserving history and emitting an internal notification.
 - The initial administrator PIN is supplied only through `BOOTSTRAP_ADMIN_PIN` / `Bootstrap__AdminPin`; no default PIN is embedded in the application.
 
+## Real printer deployment
+
+- **TSC TE210 resolution is fixed at 203 DPI.** Use 300 DPI only with a TE300/TE310-class printer. KIVRA scales TSPL coordinates and built-in font choices for the configured physical resolution.
+- Label width, height, gap/black-mark mode, gap size, print speed, density, and direct-thermal/thermal-transfer mode are emitted in each TSPL job. Calibrate the printer sensor after changing stock, then use **Test Print** before enabling kitchen use.
+- Network printing uses raw TSPL over TCP, normally port `9100`. **Scan LAN** checks the API server interfaces, the connecting user's private `/24`, and `PRINTER_DISCOVERY_NETWORKS`. For Docker Desktop, set this variable to the restaurant LAN, for example `192.168.1.0/24`, because the container normally sees only its virtual network. Reserve the selected printer IP in DHCP.
+- USB printing is server-side, not browser-side. The TSC must be installed as a RAW Windows printer queue when KIVRA runs natively on Windows, or as a CUPS raw queue when KIVRA runs on Linux/macOS. A Docker container cannot see host USB queues unless CUPS is installed in the image and the host CUPS service/socket is explicitly exposed to it. For a directly attached USB printer, running KIVRA natively on the printer host is the supported default.
+- A successful TCP connection or visible USB queue only proves transport availability. Always run **Test Print** with the exact installed roll and confirm alignment before operational printing.
+
 ## Database migration workflow
 
 The initial PostgreSQL migration is committed in `src/Kivra.Infrastructure/Migrations` and runs automatically on startup. For future schema changes, create and commit an additional migration:
