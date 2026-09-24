@@ -43,6 +43,12 @@ docker compose -f docker-compose.yml -f docker-compose.cloudflare.yml up --build
 
 Use Cloudflare Access as an additional staff identity check in front of KIVRA. Do not publish the printer's port `9100`, PostgreSQL, or Docker itself. The PIN login endpoint is rate-limited, but administrator and staff PINs should still be long and unique.
 
+### Free workers.dev forwarding address
+
+`cloudflare-worker` contains a small Worker that forwards a configurable `workers.dev` address to the active Quick Tunnel. Deploy it with `npx wrangler deploy --config cloudflare-worker/wrangler.jsonc`. The Worker name controls the first hostname segment and the Cloudflare account subdomain controls the second, for example `kivra-labels.kivraroutes.workers.dev`.
+
+The Worker address is stable, but the Quick Tunnel behind it is not. When Quick Tunnel creates a new URL, update `KIVRA_ORIGIN` in `cloudflare-worker/wrangler.jsonc` and deploy the Worker again. The restaurant computer must remain powered on and connected to the internet.
+
 ## Database migration workflow
 
 The initial PostgreSQL migration is committed in `src/Kivra.Infrastructure/Migrations` and runs automatically on startup. For future schema changes, create and commit an additional migration:

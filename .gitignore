@@ -1,4 +1,5 @@
 .env
+.wrangler/
 bin/
 obj/
 *.user

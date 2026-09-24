@@ -356,6 +356,7 @@
 .category-item-open{color:#8a989e;font-size:22px;text-align:right}
 .category-item-row:hover .category-item-open{color:#ef2440;transform:translateX(2px)}
 .category-list-shell .category-empty{border:0;border-radius:0;box-shadow:none}
+@media(min-width:760px){.home-screen .home-hero>.greeting{padding-right:0}}
 @media(max-width:759px){
   .category-list-head{display:none}
   .category-item-row{grid-template-columns:minmax(0,1fr) auto;gap:6px 10px;padding:11px 12px}
