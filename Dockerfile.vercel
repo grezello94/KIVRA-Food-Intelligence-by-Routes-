@@ -4,7 +4,7 @@ COPY . .
 RUN dotnet restore Kivra.sln \
     && dotnet publish src/Kivra.Api/Kivra.Api.csproj -c Release -o /app/publish --no-restore /p:UseAppHost=false
 
-FROM mcr.microsoft.com/dotnet/aspnet:9.0-noble-chiseled
+FROM mcr.microsoft.com/dotnet/aspnet:9.0-noble
 WORKDIR /app
 COPY --from=build /app/publish .
 ENV PORT=8080 DOTNET_EnableDiagnostics=0
