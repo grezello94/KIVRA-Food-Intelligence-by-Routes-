@@ -1,8 +1,13 @@
 /* Visual acceptance layer based on the supplied mobile kitchen-label screens. */
-.food-photo,.category-card.photo-card,.food-visual.photo-hero{background-image:url('/assets/kitchen-food-sprite.png');background-repeat:no-repeat;background-size:400% 200%}
+.food-photo,.category-card.photo-card,.food-visual.photo-hero{background-image:url('/assets/kitchen-food-sprite-v2.jpg');background-repeat:no-repeat;background-size:400% 200%}
 .photo-0{background-position:0 0!important}.photo-1{background-position:33.333% 0!important}.photo-2{background-position:66.667% 0!important}.photo-3{background-position:100% 0!important}
 .photo-4{background-position:0 100%!important}.photo-5{background-position:33.333% 100%!important}.photo-6{background-position:66.667% 100%!important}.photo-7{background-position:100% 100%!important}
 .category-card.photo-card{background-color:#162129;background-size:400% 200%;border-color:#33434d;isolation:isolate}
+.category-card.photo-card:before{content:"";position:absolute;inset:0;z-index:0;pointer-events:none;opacity:0;transition:opacity .2s ease}
+html:not(.food-sprite-ready) .category-card.photo-card:before{opacity:1;background:linear-gradient(105deg,#e2e8ea 24%,#f5f7f8 40%,#e2e8ea 56%);background-size:240% 100%;animation:category-loading 1.15s linear infinite}
+html:not(.food-sprite-ready) .category-card.photo-card:after{background:linear-gradient(to top,rgba(14,31,38,.16),transparent 65%)}
+html:not(.food-sprite-ready) .category-card.photo-card b{color:#31454e;text-shadow:none}
+@keyframes category-loading{to{background-position:-240% 0}}
 .category-card.photo-card:after{background:linear-gradient(180deg,transparent 20%,rgba(3,9,13,.9) 94%);z-index:0}
 .category-card.photo-card b{position:absolute;left:10px;bottom:10px;margin:0;max-width:130px;text-shadow:0 1px 3px #000}
 .category-card.photo-card small{color:#dbe3e8;text-shadow:0 1px 3px #000}
