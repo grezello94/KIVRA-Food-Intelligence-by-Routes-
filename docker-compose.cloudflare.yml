@@ -1,0 +1,9 @@
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    depends_on:
+      - kivra
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?Set CLOUDFLARE_TUNNEL_TOKEN in .env}
+    restart: unless-stopped

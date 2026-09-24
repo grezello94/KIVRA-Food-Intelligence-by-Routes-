@@ -4,8 +4,10 @@ using Kivra.Domain;
 using Kivra.Infrastructure;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.RateLimiting;
 using System.Security.Claims;
 using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 var builder = WebApplication.CreateBuilder(args);
@@ -29,9 +31,16 @@ builder.Services.AddDbContext<KivraDbContext>(o =>
         throw new InvalidOperationException("Database:Provider must be Postgres or Sqlite.");
 });
 builder.Services.ConfigureHttpJsonOptions(o=>o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+builder.Services.AddRateLimiter(options => options.AddFixedWindowLimiter("login", limiter =>
+{
+    limiter.PermitLimit = 20;
+    limiter.Window = TimeSpan.FromMinutes(1);
+    limiter.QueueLimit = 0;
+    limiter.AutoReplenishment = true;
+}));
 builder.Services.AddSingleton(TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")); builder.Services.AddScoped<IExpiryCalculator, ExpiryCalculator>(); builder.Services.AddSingleton<ILabelCodeGenerator, LabelCodeGenerator>(); builder.Services.AddSingleton<ITsplGenerator, TsplGenerator>(); builder.Services.AddSingleton<UsbPrinterCatalog>(); builder.Services.AddSingleton<ILabelPrinter, FakeLabelPrinter>(); builder.Services.AddSingleton<ILabelPrinter, TscTsplNetworkPrinter>(); builder.Services.AddSingleton<ILabelPrinter,TscTsplUsbPrinter>(); builder.Services.AddSingleton<ILabelPrinter,EpsonEscPosUsbPrinter>(); builder.Services.AddScoped<LabelPrintService>(); builder.Services.AddProblemDetails();
 builder.Services.AddDataProtection(); builder.Services.AddScoped<IPinAuthentication,PinAuthentication>(); builder.Services.AddScoped<PrinterOperations>(); builder.Services.AddSingleton<PrinterDiscoveryService>(); builder.Services.AddHostedService<ExpiryNotificationWorker>(); builder.Services.AddAuthentication("Kivra").AddScheme<AuthenticationSchemeOptions,KivraAuthenticationHandler>("Kivra",null); builder.Services.AddAuthorization(o=> { o.FallbackPolicy=new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build(); o.AddPolicy("Staff",p=>p.RequireRole(nameof(UserRole.KitchenStaff),nameof(UserRole.Supervisor),nameof(UserRole.Administrator))); o.AddPolicy("Supervisor",p=>p.RequireRole(nameof(UserRole.Supervisor),nameof(UserRole.Administrator))); o.AddPolicy("Admin",p=>p.RequireRole(nameof(UserRole.Administrator))); });
-var app = builder.Build(); app.UseExceptionHandler(); app.UseDefaultFiles(); app.UseStaticFiles(); app.UseAuthentication(); app.UseAuthorization();
+var app = builder.Build(); app.UseExceptionHandler(); app.UseDefaultFiles(); app.UseStaticFiles(); app.UseRateLimiter(); app.UseAuthentication(); app.UseAuthorization();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<KivraDbContext>();
@@ -44,7 +53,7 @@ using (var scope = app.Services.CreateScope())
     }
     await SeedData.EnsureSeededAsync(db, adminPin);
 }
-app.MapPost("/api/auth/pin", async (PinLoginRequest request, IPinAuthentication auth, CancellationToken ct) => { var user=await auth.AuthenticateAsync(request.Pin,ct); return user is null ? Results.Unauthorized() : Results.Ok(new { token=auth.IssueToken(user),user=new {user.Id,user.DisplayName,user.Role} }); }).AllowAnonymous();
+app.MapPost("/api/auth/pin", async (PinLoginRequest request, IPinAuthentication auth, CancellationToken ct) => { var user=await auth.AuthenticateAsync(request.Pin,ct); return user is null ? Results.Unauthorized() : Results.Ok(new { token=auth.IssueToken(user),user=new {user.Id,user.DisplayName,user.Role} }); }).RequireRateLimiting("login").AllowAnonymous();
 app.MapGet("/api/users", async (KivraDbContext db) => await db.Users.OrderBy(x=>x.DisplayName).Select(x=>new {x.Id,x.DisplayName,x.Role,x.Active,x.CreatedAt}).ToListAsync()).RequireAuthorization("Admin");
 app.MapPost("/api/users", async (CreateUserRequest request,KivraDbContext db) => { if(string.IsNullOrWhiteSpace(request.DisplayName)||request.Pin.Length<4)return Results.ValidationProblem(new Dictionary<string,string[]>{{"user",["Name and a PIN of at least four digits are required."]}}); var user=new User { DisplayName=request.DisplayName.Trim(),PinHash=PinAuthentication.Hash(request.Pin),Role=request.Role };db.Add(user);db.Add(new AuditLog { Action="UserCreated",EntityName="User",EntityId=user.Id,NewValues=$"{user.DisplayName}/{user.Role}" });await db.SaveChangesAsync();return Results.Created($"/api/users/{user.Id}",new {user.Id,user.DisplayName,user.Role});}).RequireAuthorization("Admin");
 app.MapPatch("/api/users/{id:guid}/active", async(Guid id,SetActiveRequest request,KivraDbContext db)=>{var user=await db.Users.FindAsync(id);if(user is null)return Results.NotFound();user.Active=request.Active;user.UpdatedAt=DateTimeOffset.UtcNow;db.Add(new AuditLog {Action=request.Active?"UserActivated":"UserDeactivated",EntityName="User",EntityId=id});await db.SaveChangesAsync();return Results.NoContent();}).RequireAuthorization("Admin");

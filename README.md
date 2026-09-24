@@ -28,6 +28,21 @@ Copy `.env.example` to `.env`, replace every placeholder with deployment-specifi
 - USB printing is server-side, not browser-side. The TSC must be installed as a RAW Windows printer queue when KIVRA runs natively on Windows, or as a CUPS raw queue when KIVRA runs on Linux/macOS. A Docker container cannot see host USB queues unless CUPS is installed in the image and the host CUPS service/socket is explicitly exposed to it. For a directly attached USB printer, running KIVRA natively on the printer host is the supported default.
 - A successful TCP connection or visible USB queue only proves transport availability. Always run **Test Print** with the exact installed roll and confirm alignment before operational printing.
 
+## Cloudflare Tunnel deployment
+
+Cloudflare Tunnel can publish the locally running KIVRA application without opening an inbound router port. KIVRA and PostgreSQL remain on the restaurant computer, so network printer access continues to work. The computer, Docker, printer, router, and `cloudflared` container must be running while staff use the application.
+
+1. Add a website domain to Cloudflare and create a named tunnel in **Zero Trust > Networks > Tunnels**.
+2. Add a public hostname such as `labels.example.com` with service type **HTTP** and URL `http://kivra:8080`.
+3. Copy the tunnel token into `.env` as `CLOUDFLARE_TUNNEL_TOKEN`. Never commit this token.
+4. Start the application and tunnel together:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.cloudflare.yml up --build -d
+```
+
+Use Cloudflare Access as an additional staff identity check in front of KIVRA. Do not publish the printer's port `9100`, PostgreSQL, or Docker itself. The PIN login endpoint is rate-limited, but administrator and staff PINs should still be long and unique.
+
 ## Database migration workflow
 
 The initial PostgreSQL migration is committed in `src/Kivra.Infrastructure/Migrations` and runs automatically on startup. For future schema changes, create and commit an additional migration:
