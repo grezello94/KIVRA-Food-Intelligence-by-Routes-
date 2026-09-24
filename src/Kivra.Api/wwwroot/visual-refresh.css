@@ -163,7 +163,7 @@
 /* Product branding: preserve the supplied logo's wide aspect ratio at every size. */
 .brand-logo,.nav-brand-logo,.login-logo{display:block;height:auto;object-fit:contain}
 .brand-logo{width:116px;max-height:58px}
-.nav-brand{height:92px;display:flex;align-items:center;padding:0 8px 16px;margin-bottom:8px;border-bottom:1px solid #e8edef}
+.nav-brand{width:100%;height:92px;display:flex;align-items:center;justify-content:center;padding:0 8px 16px;margin-bottom:8px;border:0;border-bottom:1px solid #e8edef;background:transparent;cursor:pointer}
 .nav-brand-logo{width:174px;max-height:82px}
 .login-logo{width:min(250px,78%);margin:0 auto 20px}
 @media(max-width:759px){.nav-brand{display:none}.brand-logo{width:100px;max-height:54px}.login-logo{width:min(220px,76%)}}
