@@ -1,5 +1,4 @@
 .env
-.wrangler/
 .vercel/
 bin/
 obj/
@@ -7,4 +6,3 @@ obj/
 *.db
 *.db-shm
 *.db-wal
-.vercel
