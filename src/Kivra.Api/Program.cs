@@ -4,17 +4,26 @@ using Kivra.Domain;
 using Kivra.Infrastructure;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.RateLimiting;
 using System.Security.Claims;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Npgsql;
 var builder = WebApplication.CreateBuilder(args);
-var provider = builder.Configuration["Database:Provider"];
+var port = Environment.GetEnvironmentVariable("PORT");
+if (!string.IsNullOrWhiteSpace(port))
+    builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
+var databaseUrl = builder.Configuration["DATABASE_URL"];
+var provider = builder.Configuration["Database:Provider"] ??
+    (!string.IsNullOrWhiteSpace(databaseUrl) ? "Postgres" : null);
 if (string.IsNullOrWhiteSpace(provider))
     throw new InvalidOperationException("Database:Provider must be configured.");
 var connectionString = builder.Configuration.GetConnectionString("Default");
+if (string.IsNullOrWhiteSpace(connectionString) && !string.IsNullOrWhiteSpace(databaseUrl))
+    connectionString = PostgreSqlConnectionString(databaseUrl);
 if (string.IsNullOrWhiteSpace(connectionString))
     throw new InvalidOperationException("ConnectionStrings:Default must be configured.");
 var adminPin = builder.Configuration["Bootstrap:AdminPin"];
@@ -39,7 +48,7 @@ builder.Services.AddRateLimiter(options => options.AddFixedWindowLimiter("login"
     limiter.AutoReplenishment = true;
 }));
 builder.Services.AddSingleton(TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")); builder.Services.AddScoped<IExpiryCalculator, ExpiryCalculator>(); builder.Services.AddSingleton<ILabelCodeGenerator, LabelCodeGenerator>(); builder.Services.AddSingleton<ITsplGenerator, TsplGenerator>(); builder.Services.AddSingleton<UsbPrinterCatalog>(); builder.Services.AddSingleton<ILabelPrinter, FakeLabelPrinter>(); builder.Services.AddSingleton<ILabelPrinter, TscTsplNetworkPrinter>(); builder.Services.AddSingleton<ILabelPrinter,TscTsplUsbPrinter>(); builder.Services.AddSingleton<ILabelPrinter,EpsonEscPosUsbPrinter>(); builder.Services.AddScoped<LabelPrintService>(); builder.Services.AddProblemDetails();
-builder.Services.AddDataProtection(); builder.Services.AddScoped<IPinAuthentication,PinAuthentication>(); builder.Services.AddScoped<PrinterOperations>(); builder.Services.AddSingleton<PrinterDiscoveryService>(); builder.Services.AddHostedService<ExpiryNotificationWorker>(); builder.Services.AddAuthentication("Kivra").AddScheme<AuthenticationSchemeOptions,KivraAuthenticationHandler>("Kivra",null); builder.Services.AddAuthorization(o=> { o.FallbackPolicy=new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build(); o.AddPolicy("Staff",p=>p.RequireRole(nameof(UserRole.KitchenStaff),nameof(UserRole.Supervisor),nameof(UserRole.Administrator))); o.AddPolicy("Supervisor",p=>p.RequireRole(nameof(UserRole.Supervisor),nameof(UserRole.Administrator))); o.AddPolicy("Admin",p=>p.RequireRole(nameof(UserRole.Administrator))); });
+builder.Services.AddDataProtection().PersistKeysToDbContext<KivraDbContext>(); builder.Services.AddScoped<IPinAuthentication,PinAuthentication>(); builder.Services.AddScoped<PrinterOperations>(); builder.Services.AddSingleton<PrinterDiscoveryService>(); builder.Services.AddHostedService<ExpiryNotificationWorker>(); builder.Services.AddAuthentication("Kivra").AddScheme<AuthenticationSchemeOptions,KivraAuthenticationHandler>("Kivra",null); builder.Services.AddAuthorization(o=> { o.FallbackPolicy=new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build(); o.AddPolicy("Staff",p=>p.RequireRole(nameof(UserRole.KitchenStaff),nameof(UserRole.Supervisor),nameof(UserRole.Administrator))); o.AddPolicy("Supervisor",p=>p.RequireRole(nameof(UserRole.Supervisor),nameof(UserRole.Administrator))); o.AddPolicy("Admin",p=>p.RequireRole(nameof(UserRole.Administrator))); });
 var app = builder.Build(); app.UseExceptionHandler(); app.UseDefaultFiles(); app.UseStaticFiles(); app.UseRateLimiter(); app.UseAuthentication(); app.UseAuthorization();
 using (var scope = app.Services.CreateScope())
 {
@@ -87,6 +96,25 @@ app.MapGet("/api/notifications", async (KivraDbContext db) => (await db.Notifica
 app.MapPost("/api/notifications/{id:guid}/read", async(Guid id,KivraDbContext db) => {var n=await db.Notifications.FindAsync(id);if(n is null)return Results.NotFound();n.ReadAt=DateTimeOffset.UtcNow;await db.SaveChangesAsync();return Results.NoContent();}).RequireAuthorization("Staff");
 app.MapGet("/api/reports/labels.csv", async (KivraDbContext db) => { var records=(await db.Labels.ToListAsync()).OrderByDescending(x=>x.CreatedAt); var csv="Label Code,Item,Created,Expiry,Storage,Status\n"+string.Join('\n',records.Select(x=>$"{x.LabelCode},\"{x.ItemNameSnapshot.Replace("\"","\"\"")}\",{x.CreatedAt:O},{x.ExpiryDateTime:O},\"{x.StorageLocationSnapshot}\",{x.CurrentStatus}")); return Results.File(System.Text.Encoding.UTF8.GetBytes(csv),"text/csv","kivra-label-report.csv"); }).RequireAuthorization("Supervisor");
 app.MapGet("/api/dashboard", async (KivraDbContext db) => { var now=DateTimeOffset.UtcNow; var midnight=new DateTimeOffset(now.Year,now.Month,now.Day,0,0,0,TimeSpan.Zero); var labels=await db.Labels.ToListAsync();var jobs=await db.PrintJobs.ToListAsync(); return new { labelsPrintedToday=jobs.Count(x=>x.Status==PrintJobStatus.Printed && x.CompletedAt>=midnight), currentlyActive=labels.Count(x=>x.CurrentStatus==LabelStatus.Active), expired=labels.Count(x=>x.ExpiryDateTime<now && x.CurrentStatus==LabelStatus.Active), expiringToday=labels.Count(x=>x.CurrentStatus==LabelStatus.Active && x.ExpiryDateTime>=now && x.ExpiryDateTime<midnight.AddDays(1)), printerFailures=jobs.Count(x=>x.Status==PrintJobStatus.Failed) }; });
+static string PostgreSqlConnectionString(string value)
+{
+    if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+        uri.Scheme is not ("postgres" or "postgresql"))
+        return value;
+
+    var userInfo = uri.UserInfo.Split(':', 2);
+    return new NpgsqlConnectionStringBuilder
+    {
+        Host = uri.Host,
+        Port = uri.IsDefaultPort ? 5432 : uri.Port,
+        Database = Uri.UnescapeDataString(uri.AbsolutePath.TrimStart('/')),
+        Username = Uri.UnescapeDataString(userInfo[0]),
+        Password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : string.Empty,
+        SslMode = SslMode.Require,
+        Pooling = true,
+        MaxPoolSize = 10
+    }.ConnectionString;
+}
 static Dictionary<string,string[]>? ValidatePrinter(Printer p){var errors=new Dictionary<string,string[]>();if(string.IsNullOrWhiteSpace(p.Name))errors["name"]=["Printer name is required."];if(string.IsNullOrWhiteSpace(p.Model))errors["model"]=["Printer model is required."];if(p.Driver is not ("Fake" or "TscTsplNetwork" or "TscTsplUsb" or "EpsonEscPosUsb"))errors["driver"]=["Driver must be Fake, TscTsplNetwork, TscTsplUsb, or EpsonEscPosUsb."];if(p.Driver=="TscTsplNetwork"&&string.IsNullOrWhiteSpace(p.IpAddress))errors["ipAddress"]=["IP address is required for a network printer."];if(p.Driver is "TscTsplUsb" or "EpsonEscPosUsb"&&string.IsNullOrWhiteSpace(p.UsbQueueName))errors["usbQueueName"]=["An operating-system USB printer queue is required."];if(p.Driver=="TscTsplNetwork"&&p.TcpPort is <1 or >65535)errors["tcpPort"]=["TCP port must be between 1 and 65535."];if(p.Dpi is not (203 or 300))errors["dpi"]=["TSC resolution must be 203 or 300 DPI."];if(p.Model.Contains("TE210",StringComparison.OrdinalIgnoreCase)&&p.Dpi!=203)errors["dpi"]=["TSC TE210 has a fixed 203 DPI print head."];if((p.Model.Contains("TE300",StringComparison.OrdinalIgnoreCase)||p.Model.Contains("TE310",StringComparison.OrdinalIgnoreCase))&&p.Dpi!=300)errors["dpi"]=["TSC TE300/TE310 models have a fixed 300 DPI print head."];var maxWidth=p.Dpi==300?105.7m:108m;if(p.LabelWidthMm<20||p.LabelWidthMm>maxWidth||p.LabelHeightMm<10)errors["labelSize"]=[$"Label size must be at least 20 × 10 mm and width cannot exceed {maxWidth} mm at {p.Dpi} DPI."];if(p.MediaSensingMode is not ("Gap" or "BlackMark" or "Continuous"))errors["mediaSensingMode"]=["Media sensing must be Gap, BlackMark, or Continuous."];if(p.MediaSensingMode!="Continuous"&&p.GapMm<=0)errors["gapMm"]=["Gap or black-mark size must be greater than zero."];if(p.PrintMethod is not ("DirectThermal" or "ThermalTransfer"))errors["printMethod"]=["Print method must be DirectThermal or ThermalTransfer."];var maxSpeed=p.Dpi==300?5m:6m;if(p.PrintSpeedIps<1||p.PrintSpeedIps>maxSpeed)errors["printSpeedIps"]=[$"Print speed must be between 1 and {maxSpeed} inches per second at {p.Dpi} DPI."];if(p.PrintDensity is <0 or >15)errors["printDensity"]=["Print density must be between 0 and 15."];return errors.Count==0?null:errors;}
 app.Run();
 public record PinLoginRequest(string Pin);
