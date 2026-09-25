@@ -1,0 +1,9 @@
+.git
+.github
+.wrangler
+android-bridge
+cloudflare-worker
+**/bin
+**/obj
+**/.dart_tool
+**/build
