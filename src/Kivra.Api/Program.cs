@@ -13,6 +13,10 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Npgsql;
 var builder = WebApplication.CreateBuilder(args);
+// The Windows Event Log provider requires elevated permissions and can turn an
+// otherwise harmless log entry into a failed request for locally hosted KIVRA.
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
 var port = Environment.GetEnvironmentVariable("PORT");
 if (!string.IsNullOrWhiteSpace(port))
     builder.WebHost.UseUrls($"http://0.0.0.0:{port}");

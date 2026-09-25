@@ -19,27 +19,23 @@ public sealed class TsplGenerator : ITsplGenerator {
  public string Generate(Label l, Printer p, TimeZoneInfo tz) {
   var op=TimeZoneInfo.ConvertTime(l.OperationalDateTime,tz);var exp=TimeZoneInfo.ConvertTime(l.ExpiryDateTime,tz);
   var dotsPerMm=p.Dpi/25.4m;int Dot(decimal mm)=>Math.Max(0,(int)Math.Round(mm*dotsPerMm,MidpointRounding.AwayFromZero));
-  var widthDots=Dot(p.LabelWidthMm);var margin=Dot(2);var valueX=Dot(p.LabelWidthMm<45?14:19);var footerY=Dot(p.LabelHeightMm-3.7m);
-  var titleFont=p.Dpi>=300?"4":"3";var bodyFont=p.Dpi>=300?"3":"2";var footerFont=p.Dpi>=300?"2":"1";
-  var titleCharDots=p.Dpi>=300?24:16;var footerCharDots=p.Dpi>=300?12:8;
+  var widthDots=Dot(p.LabelWidthMm);var margin=Dot(2);var valueX=Dot(p.LabelWidthMm<45?14:19);
+  var titleFont=p.Dpi>=300?"4":"3";var bodyFont=p.Dpi>=300?"3":"2";
+  var titleCharDots=p.Dpi>=300?24:16;
   var name=Truncate(Clean(l.ItemNameSnapshot).ToUpperInvariant(),Math.Max(8,(widthDots-margin*2)/titleCharDots));
   var classification=l.ClassificationSnapshot switch{Classification.NonVeg=>"NON-VEG",Classification.Veg=>"VEG",Classification.Egg=>"EGG",_=>"OTHER"};
   var media=p.MediaSensingMode switch{"BlackMark"=>$"BLINE {Num(p.GapMm)} mm,0 mm","Continuous"=>"GAP 0 mm,0 mm",_=>$"GAP {Num(p.GapMm)} mm,0 mm"};
-  var code=Clean(l.LabelCode);var codeX=Math.Max(margin,widthDots-margin-code.Length*footerCharDots);var storageChars=Math.Max(4,(codeX-margin-Dot(1))/footerCharDots);
-  var storage=Truncate(Clean(l.StorageLocationSnapshot).ToUpperInvariant(),storageChars);
   return $"SIZE {Num(p.LabelWidthMm)} mm,{Num(p.LabelHeightMm)} mm\r\n{media}\r\nSPEED {Num(p.PrintSpeedIps)}\r\nDENSITY {p.PrintDensity}\r\nSET RIBBON {(p.PrintMethod=="ThermalTransfer"?"ON":"OFF")}\r\nDIRECTION 1\r\nREFERENCE 0,0\r\nCLS\r\n"+
-   $"TEXT {margin},{Dot(1)},\"{titleFont}\",0,1,1,\"{name}\"\r\n"+
-   $"TEXT {margin},{Dot(4.4m)},\"{bodyFont}\",0,1,1,\"{classification}\"\r\n"+
-   $"BAR {margin},{Dot(7.5m)},{Math.Max(1,widthDots-margin*2)},1\r\n"+
-   $"TEXT {margin},{Dot(8.3m)},\"{bodyFont}\",0,1,1,\"{Truncate(Clean(l.DateTerminologySnapshot).ToUpperInvariant(),9)}\"\r\n"+
-   $"TEXT {valueX},{Dot(8.3m)},\"{bodyFont}\",0,1,1,\"{op:dd MMM yyyy}\"\r\n"+
-   $"TEXT {valueX},{Dot(11m)},\"{bodyFont}\",0,1,1,\"{op:hh:mm tt}\"\r\n"+
-   $"TEXT {margin},{Dot(14.1m)},\"{titleFont}\",0,1,1,\"USE BY\"\r\n"+
-   $"TEXT {valueX},{Dot(14.1m)},\"{titleFont}\",0,1,1,\"{exp:dd MMM yyyy}\"\r\n"+
-   $"TEXT {valueX},{Dot(17m)},\"{bodyFont}\",0,1,1,\"{exp:hh:mm tt}\"\r\n"+
-   $"BAR {margin},{Dot(p.LabelHeightMm-4.5m)},{Math.Max(1,widthDots-margin*2)},1\r\n"+
-   $"TEXT {margin},{footerY},\"{footerFont}\",0,1,1,\"{storage}\"\r\n"+
-   $"TEXT {codeX},{footerY},\"{footerFont}\",0,1,1,\"{code}\"\r\nPRINT 1,1\r\n";
+   $"TEXT {margin},{Dot(2)},\"{titleFont}\",0,1,1,\"{name}\"\r\n"+
+   $"TEXT {margin},{Dot(5.5m)},\"{bodyFont}\",0,1,1,\"{classification}\"\r\n"+
+   $"BAR {margin},{Dot(8m)},{Math.Max(1,widthDots-margin*2)},1\r\n"+
+   $"TEXT {margin},{Dot(8.8m)},\"{bodyFont}\",0,1,1,\"{Truncate(Clean(l.DateTerminologySnapshot).ToUpperInvariant(),9)}\"\r\n"+
+   $"TEXT {valueX},{Dot(8.8m)},\"{bodyFont}\",0,1,1,\"{op:dd MMM yyyy}\"\r\n"+
+   $"TEXT {valueX},{Dot(11.5m)},\"{bodyFont}\",0,1,1,\"{op:hh:mm tt}\"\r\n"+
+   $"TEXT {margin},{Dot(14.5m)},\"{titleFont}\",0,1,1,\"USE BY\"\r\n"+
+   $"TEXT {valueX},{Dot(14.5m)},\"{titleFont}\",0,1,1,\"{exp:dd MMM yyyy}\"\r\n"+
+   $"TEXT {valueX},{Dot(17.5m)},\"{bodyFont}\",0,1,1,\"{exp:hh:mm tt}\"\r\n"+
+   "PRINT 1,1\r\n";
  }
  static string Num(decimal value)=>value.ToString("0.##",CultureInfo.InvariantCulture);
  static string Truncate(string value,int max)=>value.Length<=max?value:value[..Math.Max(1,max-1)]+"~";

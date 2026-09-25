@@ -6,12 +6,33 @@ using Kivra.Domain;
 namespace Kivra.Infrastructure;
 public sealed class UsbPrinterCatalog {
  public async Task<IReadOnlyList<string>> GetQueuesAsync(CancellationToken ct) {
+  if(OperatingSystem.IsWindows())return WindowsPrinterQueues.GetQueues();
   var start=new ProcessStartInfo{RedirectStandardOutput=true,RedirectStandardError=true,UseShellExecute=false,CreateNoWindow=true};
-  if(OperatingSystem.IsWindows()){start.FileName="powershell.exe";start.ArgumentList.Add("-NoProfile");start.ArgumentList.Add("-Command");start.ArgumentList.Add("Get-Printer | ForEach-Object { $_.Name }");}
-  else{start.FileName="lpstat";start.ArgumentList.Add("-p");}
-  try{using var process=Process.Start(start);if(process is null)return[];var output=await process.StandardOutput.ReadToEndAsync(ct);await process.WaitForExitAsync(ct);if(process.ExitCode!=0)return[];return output.Split(['\r','\n'],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries).Select(x=>OperatingSystem.IsWindows()?x:ParseUnixQueue(x)).Where(x=>!string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x=>x).ToList();}catch(Exception ex)when(ex is System.ComponentModel.Win32Exception or InvalidOperationException){return[];}
+  start.FileName="lpstat";start.ArgumentList.Add("-p");
+  try{using var process=Process.Start(start);if(process is null)return[];var output=await process.StandardOutput.ReadToEndAsync(ct);await process.WaitForExitAsync(ct);if(process.ExitCode!=0)return[];return output.Split(['\r','\n'],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries).Select(ParseUnixQueue).Where(x=>!string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x=>x).ToList();}catch(Exception ex)when(ex is System.ComponentModel.Win32Exception or InvalidOperationException){return[];}
  }
  static string ParseUnixQueue(string line){const string prefix="printer ";if(!line.StartsWith(prefix,StringComparison.OrdinalIgnoreCase))return string.Empty;var rest=line[prefix.Length..];var end=rest.IndexOf(' ');return end<0?rest:rest[..end];}
+
+ static class WindowsPrinterQueues {
+  const int PrinterEnumLocal=2,PrinterEnumConnections=4,ErrorInsufficientBuffer=122;
+  [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)]struct PrinterInfo4{public IntPtr PrinterName;public IntPtr ServerName;public uint Attributes;}
+  [DllImport("winspool.drv",SetLastError=true,CharSet=CharSet.Unicode)]static extern bool EnumPrinters(int flags,string? name,int level,IntPtr buffer,int size,out int needed,out int returned);
+  public static IReadOnlyList<string> GetQueues(){
+   const int flags=PrinterEnumLocal|PrinterEnumConnections;
+   EnumPrinters(flags,null,4,IntPtr.Zero,0,out var needed,out _);
+   var error=Marshal.GetLastWin32Error();
+   if(needed==0){if(error==0)return[];throw new System.ComponentModel.Win32Exception(error,"Windows could not enumerate printer queues.");}
+   if(error!=ErrorInsufficientBuffer)throw new System.ComponentModel.Win32Exception(error,"Windows could not size the printer queue list.");
+   var buffer=Marshal.AllocHGlobal(needed);
+   try{
+    if(!EnumPrinters(flags,null,4,buffer,needed,out _,out var returned))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(),"Windows could not enumerate printer queues.");
+    var size=Marshal.SizeOf<PrinterInfo4>();
+    var queues=new List<string>(returned);
+    for(var i=0;i<returned;i++){var info=Marshal.PtrToStructure<PrinterInfo4>(IntPtr.Add(buffer,i*size));var queue=Marshal.PtrToStringUni(info.PrinterName);if(!string.IsNullOrWhiteSpace(queue))queues.Add(queue);}
+    return queues.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x=>x).ToList();
+   }finally{Marshal.FreeHGlobal(buffer);}
+  }
+ }
 }
 public sealed class TscTsplUsbPrinter(UsbPrinterCatalog catalog):ILabelPrinter {
  public async Task<PrinterResult> TestConnectionAsync(Printer printer,CancellationToken ct){if(string.IsNullOrWhiteSpace(printer.UsbQueueName))return new(false,"USB printer queue is not configured.");var queues=await catalog.GetQueuesAsync(ct);return queues.Contains(printer.UsbQueueName,StringComparer.OrdinalIgnoreCase)?new(true):new(false,$"USB printer queue '{printer.UsbQueueName}' was not found on the server.");}

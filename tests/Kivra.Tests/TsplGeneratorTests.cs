@@ -9,6 +9,8 @@ public sealed class TsplGeneratorTests {
 
  [Fact] public void Emits_50x30_tspl_with_critical_label_content() { var output=new TsplGenerator().Generate(Label(),Printer(),Zone);Assert.Contains("SIZE 50 mm,30 mm",output);Assert.Contains("CHICKEN PAKORA",output);Assert.Contains("NON-VEG",output);Assert.Contains("USE BY",output);Assert.Contains("PRINT 1,1",output); }
 
+ [Fact] public void Omits_storage_location_and_internal_label_code() { var output=new TsplGenerator().Generate(Label(),Printer(height:25),Zone);Assert.DoesNotContain("CHILLER",output);Assert.DoesNotContain("RL-",output); }
+
  [Theory]
  [InlineData(50,30,203)]
  [InlineData(50,25,203)]
