@@ -1,5 +1,5 @@
 /* Visual acceptance layer based on the supplied mobile kitchen-label screens. */
-.food-photo,.category-card.photo-card,.food-visual.photo-hero{background-image:url('/assets/kitchen-food-sprite-v2.jpg');background-repeat:no-repeat;background-size:400% 200%}
+.food-photo,.category-card.photo-card,.food-visual.photo-hero{background-image:url('/assets/kitchen-food-sprite-v2.webp');background-repeat:no-repeat;background-size:400% 200%}
 .photo-0{background-position:0 0!important}.photo-1{background-position:33.333% 0!important}.photo-2{background-position:66.667% 0!important}.photo-3{background-position:100% 0!important}
 .photo-4{background-position:0 100%!important}.photo-5{background-position:33.333% 100%!important}.photo-6{background-position:66.667% 100%!important}.photo-7{background-position:100% 100%!important}
 .category-card.photo-card{background-color:#162129;background-size:400% 200%;border-color:#33434d;isolation:isolate}
@@ -124,6 +124,8 @@ html:not(.food-sprite-ready) .category-card.photo-card b{color:#31454e;text-shad
 .bridge-device>span:nth-child(2) b,.bridge-device>span:nth-child(2) small{display:block}
 .bridge-device>span:nth-child(2) small{margin-top:4px;color:var(--muted);font-size:11px}
 .bridge-device .btn{width:auto;height:38px;padding:0 14px}
+.bridge-steps{display:grid;gap:8px;margin:0;padding:0 20px 20px 38px;color:#53666f;font-size:12px;line-height:1.5}
+.bridge-steps b{color:#24363e}
 @media(max-width:520px){.bridge-pair .panel-heading{align-items:flex-start;flex-direction:column}.bridge-pair .panel-heading .btn{width:100%}.bridge-device{grid-template-columns:18px 1fr}.bridge-device .btn{grid-column:2;justify-self:start}}
 .admin-toolbar{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:16px}
 .admin-toolbar .btn{width:auto;min-width:118px;padding:0 18px}
@@ -416,4 +418,185 @@ html:not(.food-sprite-ready) .category-card.photo-card b{color:#31454e;text-shad
   .home-screen .home-hero,.home-screen .content-section{padding-inline:14px}
   .home-screen .greeting h2{font-size:22px}
   .home-screen .category-card b{font-size:13px}
+}
+
+/* Responsive application system: the final layer intentionally normalises legacy screens. */
+:root{
+  --app-sidebar:236px;
+  --app-mobile-nav:64px;
+  --app-width:1280px;
+  --app-gutter:32px;
+  --app-canvas:#f5f7f8;
+  --app-surface:#fff;
+  --app-ink:#172830;
+  --app-muted:#6f7f86;
+  --app-line:#dbe4e7;
+  --app-accent:#ef2440;
+  --app-radius:8px;
+}
+html{background:var(--app-canvas)}
+body,.app-shell{background:var(--app-canvas);color:var(--app-ink)}
+.screen{max-width:none}
+.screen:not(.home-screen){background:var(--app-canvas)}
+.btn,.icon-btn,.settings-row,.list-row,.history-row,.expiry-row,.category-item-row,.printer-list-row{touch-action:manipulation}
+.btn{min-height:46px;padding:0 18px;border-radius:var(--app-radius);font-size:13px}
+.field input,.field select,.admin-search,.search{border-radius:var(--app-radius)}
+.settings-card,.settings-panel,.form-section,.user-create-panel,.user-directory,.storage-list,.category-list-shell,.history-ledger,.history-empty{border-radius:var(--app-radius)}
+.empty{border-radius:var(--app-radius)}
+
+@media(min-width:760px){
+  .app-shell{padding:0}
+  .bottom-nav{inset:0 auto 0 0;width:var(--app-sidebar);height:100dvh;padding:18px 16px 24px;gap:5px;border:0;border-right:1px solid var(--app-line);background:#fff;box-shadow:none}
+  .bottom-nav .nav-brand{height:94px;margin:0 0 12px;padding:4px 8px 18px}
+  .bottom-nav .nav-brand-logo{width:170px;max-height:72px}
+  .bottom-nav button:not(.nav-brand){height:50px;min-height:50px;padding:0 14px;gap:12px;border-radius:var(--app-radius)}
+  .bottom-nav button:not(.nav-brand) i{width:22px;font-size:19px}
+  .bottom-nav button:not(.nav-brand) span{font-size:13px}
+  .bottom-nav button.active{background:#ffeaed;color:#df1933}
+  .topbar,.topbar.dark{height:68px;min-height:68px;margin-left:var(--app-sidebar);padding:0 var(--app-gutter);border:0;border-bottom:1px solid var(--app-line);background:#fff;color:var(--app-ink);overflow:visible}
+  .topbar:has(>h1:empty),body:has(.home-screen) .topbar,body:has(.category-screen) .topbar,body:has(.history-screen) .topbar{height:0;min-height:0;padding:0;border:0;overflow:hidden}
+  .topbar>h1{font-size:20px;letter-spacing:0}
+  .topbar .icon-btn{width:38px;height:38px;border-radius:var(--app-radius);font-size:27px}
+  .screen:not(.home-screen){min-height:calc(100dvh - 68px);margin:0;padding:28px var(--app-gutter) 56px calc(var(--app-sidebar) + var(--app-gutter))!important}
+  .screen.category-screen,.screen.history-screen{min-height:100dvh;padding-top:32px!important}
+  .screen>*,.settings-page,.admin-page,.simple-page,.admin-form,.history-page,.category-page,.print-workspace{width:100%;max-width:var(--app-width);margin-left:auto;margin-right:auto}
+  .simple-page,.admin-form{max-width:900px}
+  .settings-page{max-width:1120px}
+  .home-screen{padding-left:var(--app-sidebar)!important}
+  .home-screen .home-hero,.home-screen .content-section{padding-left:var(--app-gutter);padding-right:var(--app-gutter)}
+  .home-screen .home-hero>*,.home-screen .content-section>*{max-width:var(--app-width)}
+  .home-screen .category-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+  .home-screen .category-card{height:auto;aspect-ratio:16/7;border-radius:var(--app-radius)}
+  .home-screen .category-card b{font-size:15px}
+  .settings-grid{grid-template-columns:minmax(0,.9fr) minmax(0,1.35fr);gap:20px;align-items:start}
+  .metric-grid{max-width:var(--app-width);padding:0;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+  .screen>.section-heading,.expiry-list{max-width:var(--app-width)}
+}
+
+@media(max-width:759px){
+  body{overflow-x:hidden}
+  .app-shell{padding-bottom:calc(var(--app-mobile-nav) + env(safe-area-inset-bottom))}
+  .bottom-nav{height:calc(var(--app-mobile-nav) + env(safe-area-inset-bottom));padding:0 6px env(safe-area-inset-bottom);background:#fff;border-color:var(--app-line)}
+  .bottom-nav button{height:var(--app-mobile-nav);min-width:0;padding:0 4px}
+  .bottom-nav button i{font-size:20px}
+  .bottom-nav button span{font-size:10px}
+  .topbar,.topbar.dark{height:58px;min-height:58px;padding:0 14px;background:#fff;color:var(--app-ink);border-color:var(--app-line)}
+  .topbar>h1{font-size:18px;letter-spacing:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .topbar .icon-btn{width:38px;height:38px;padding:0;border:1px solid var(--app-line);border-radius:var(--app-radius);background:#fff;font-size:28px}
+  .topbar .icon-btn[data-action="notifications"]{display:none}
+  .screen:not(.home-screen){width:100%;min-height:calc(100dvh - 58px);margin:0;padding:16px 14px calc(84px + env(safe-area-inset-bottom))!important}
+  .screen.category-screen,.screen.history-screen{padding-top:14px!important}
+  .simple-page,.admin-form,.settings-page,.admin-page,.history-page,.category-page,.print-workspace{width:100%;max-width:none;margin:0;padding-left:0;padding-right:0}
+  .btn{min-height:48px}
+  .field{margin:13px 0}
+  .field input,.field select{height:48px;font-size:16px}
+  .field-pair{grid-template-columns:1fr;gap:0}
+  .choice-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
+  .choice-row label{min-width:0;padding:11px 4px}
+  .settings-card,.form-section{margin:0 0 12px;padding-left:14px;padding-right:14px}
+  .form-section{padding-top:4px;padding-bottom:14px}
+  .form-section h3{margin-top:12px}
+  .admin-form{padding:0}
+  .admin-toolbar{margin-bottom:14px}
+  .admin-toolbar h2{font-size:21px}
+  .admin-toolbar .btn{width:auto;min-height:42px;padding:0 13px}
+  .metric-grid{padding:0;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+  .metric{min-height:82px;border-radius:var(--app-radius)}
+  .screen>.section-heading{margin-top:10px}
+  .expiry-list{padding:0}
+  .expiry-row{padding:13px 10px 13px 14px;border:1px solid var(--app-line);border-radius:var(--app-radius);margin-bottom:8px}
+  .expiry-row:before{top:12px;bottom:12px}
+}
+
+/* Home */
+.home-screen .search{border:1px solid var(--app-line);background:#fff}
+.home-screen .category-card{border-radius:var(--app-radius)}
+.home-screen .recent-list.is-empty,.home-screen .list-row{border-color:var(--app-line);background:#fff;color:var(--app-ink)}
+.home-screen .row-copy small{color:var(--app-muted)}
+@media(max-width:759px){
+  .home-screen .home-hero{padding:22px 14px 16px}
+  .home-screen .content-section{padding:16px 14px 24px}
+  .home-screen .category-grid{gap:8px}
+  .home-screen .category-card{aspect-ratio:4/3}
+}
+
+/* Categories and history */
+.category-page,.history-page{max-width:var(--app-width)}
+.category-search,.history-search{height:48px;border:1px solid var(--app-line);background:#fff}
+.category-item-row,.history-row{min-width:0}
+@media(max-width:759px){
+  .category-heading p,.history-heading p{font-size:11px}
+  .category-search,.history-search{width:100%;margin-bottom:12px}
+  .category-list-shell{box-shadow:none}
+  .category-item-row{min-height:86px}
+  .category-item-detail{display:inline-flex;gap:5px;align-items:baseline}
+  .category-item-detail small{margin:0}
+  .history-ledger{box-shadow:none}
+  .history-screen:has(.history-table) .history-row{grid-template-columns:52px minmax(0,1fr) 80px;padding:13px 11px}
+  .history-row b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+}
+
+/* Print, preview and completion */
+.print-workspace{max-width:1120px}
+.product-summary .food-visual,.date-summary,.print-controls{border-radius:var(--app-radius)}
+.preview-screen,.success{width:100%;max-width:520px}
+@media(max-width:759px){
+  .product-summary .food-visual{margin:0;aspect-ratio:16/9}
+  .product-heading{padding:14px 2px 12px}
+  .product-heading h2{font-size:21px}
+  .date-summary{grid-template-columns:1fr}
+  .date-block+.date-block{border-left:0;border-top:1px solid #e1e8eb}
+  .print-controls{margin-top:12px;padding:15px;box-shadow:none}
+  .print-controls header p{line-height:1.45}
+  .quantity-control{gap:12px}
+  .print-actions{gap:8px}
+  .preview-screen,.success{padding:8px 0 18px}
+  .label-paper{margin:18px auto}
+}
+
+/* Settings and administration */
+.settings-panel,.user-create-panel,.user-directory,.storage-list{overflow:hidden;border:1px solid var(--app-line);background:#fff}
+.panel-heading{min-height:68px}
+.settings-row{min-height:62px}
+.settings-row b small{line-height:1.35}
+.signout-link{min-height:46px;border-radius:var(--app-radius)}
+.printer-list{margin:0 auto;max-width:900px}
+.admin-heading{max-width:900px;margin:0 auto 12px;padding:0}
+.admin-search{border:1px solid var(--app-line);background:#fff}
+.user-create-panel{margin-bottom:16px}
+.user-directory{border-radius:var(--app-radius)}
+.about-logo{width:min(360px,78%);max-height:180px}
+@media(max-width:759px){
+  .settings-grid{display:grid;grid-template-columns:1fr;gap:12px}
+  .settings-panel{border-radius:var(--app-radius)}
+  .panel-heading{min-height:62px;padding:12px 14px}
+  .panel-actions{padding:12px 14px}
+  .settings-row{grid-template-columns:24px minmax(0,1fr) 18px;padding:12px 14px}
+  .settings-row b{min-width:0}
+  .settings-row b small{white-space:normal}
+  .signout-link{width:100%;margin:14px 0 0}
+  .admin-heading{display:flex;align-items:flex-end;margin-bottom:12px}
+  .printer-list{margin:0}
+  .printer-list-row{grid-template-columns:14px minmax(0,1fr) 18px;padding:14px 12px}
+  .printer-list-row small{white-space:normal;overflow-wrap:anywhere}
+  .label-presets{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+  .label-presets button{min-width:0;padding:0 5px;font-size:11px}
+  .user-management-row{padding:13px 12px}
+  .user-toggle{min-height:38px;padding:0 10px;font-size:11px}
+  .storage-contents{margin:8px 0 18px}
+  .bridge-device{padding:12px 14px}
+  .bridge-steps{padding:0 14px 18px 32px;font-size:11px}
+  .about-card{padding:18px 14px}
+  .about-logo{width:min(280px,82%);max-height:140px}
+}
+
+/* Small phones */
+@media(max-width:380px){
+  .screen:not(.home-screen){padding-inline:11px!important}
+  .topbar{padding-inline:11px}
+  .home-screen .home-hero,.home-screen .content-section{padding-inline:11px}
+  .home-screen .greeting h2{font-size:21px}
+  .home-screen .category-card b{font-size:12px}
+  .date-block{padding:14px}
+  .classification-options label b{font-size:10px}
 }
