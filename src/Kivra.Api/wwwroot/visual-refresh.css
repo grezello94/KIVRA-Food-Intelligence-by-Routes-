@@ -385,3 +385,35 @@ html:not(.food-sprite-ready) .category-card.photo-card b{color:#31454e;text-shad
   .category-item-detail:nth-child(3){grid-row:3}
   .category-item-open{grid-column:2;grid-row:1/4;align-self:center}
 }
+
+/* Mobile home: one calm workspace with navigation kept separate from branding. */
+@media(max-width:759px){
+  body,.app-shell,.screen.home-screen{background:#f6f8f9}
+  .app-shell{padding-bottom:calc(64px + env(safe-area-inset-bottom))}
+  body:has(.home-screen) .topbar{height:0;min-height:0;padding:0;border:0;overflow:hidden}
+  .screen.home-screen{width:100%;max-width:none;min-height:100dvh;margin:0;padding:0 0 calc(76px + env(safe-area-inset-bottom))}
+  .home-screen .home-hero{padding:24px 18px 20px;background:#f6f8f9;color:#172830}
+  .home-screen .greeting h2{margin:0;font-size:24px;line-height:1.18;font-weight:800}
+  .home-screen .greeting p{margin:6px 0 0;color:#6d7d84;font-size:13px;line-height:1.4}
+  .home-screen .search{height:52px;margin:18px 0 0;padding:0 15px;border:1px solid #d8e2e6;border-radius:8px;box-shadow:0 4px 14px #18333e0b}
+  .home-screen .search input{font-size:14px}
+  .home-screen .category-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}
+  .home-screen .category-card{width:100%;height:auto;min-height:0;aspect-ratio:4/3;padding:10px;border:0;border-radius:8px;box-shadow:0 4px 12px #18333e16}
+  .home-screen .category-card b{left:11px;right:9px;bottom:10px;font-size:14px;line-height:1.2}
+  .home-screen .content-section{padding:18px 18px 28px;border-top:1px solid #e2e9ec;background:#f6f8f9;color:#172830}
+  .home-screen .section-heading{padding:0}
+  .home-screen .section-heading h2{margin:0 0 12px;font-size:18px}
+  .home-screen .recent-list{border:0}
+  .home-screen .recent-list.is-empty{border-color:#d8e2e6;box-shadow:0 4px 14px #18333e09}
+  .home-screen .recent-list.is-empty .empty{min-height:104px}
+  .bottom-nav{height:calc(64px + env(safe-area-inset-bottom));padding:0 8px env(safe-area-inset-bottom);box-shadow:0 -5px 18px #18333e12}
+  .bottom-nav>.nav-brand{display:none!important}
+  .bottom-nav button{min-width:0;height:64px;gap:3px}
+  .bottom-nav button i{font-size:20px;line-height:1}
+  .bottom-nav button span{font-size:10px;font-weight:650}
+}
+@media(max-width:380px){
+  .home-screen .home-hero,.home-screen .content-section{padding-inline:14px}
+  .home-screen .greeting h2{font-size:22px}
+  .home-screen .category-card b{font-size:13px}
+}
