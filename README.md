@@ -27,6 +27,7 @@ Copy `.env.example` to `.env`, replace every placeholder with deployment-specifi
 - Network printing uses raw TSPL over TCP, normally port `9100`. **Scan LAN** checks the API server interfaces, the connecting user's private `/24`, and `PRINTER_DISCOVERY_NETWORKS`. For Docker Desktop, set this variable to the restaurant LAN, for example `192.168.1.0/24`, because the container normally sees only its virtual network. Reserve the selected printer IP in DHCP.
 - USB printing is server-side, not browser-side. The TSC must be installed as a RAW Windows printer queue when KIVRA runs natively on Windows, or as a CUPS raw queue when KIVRA runs on Linux/macOS. A Docker container cannot see host USB queues unless CUPS is installed in the image and the host CUPS service/socket is explicitly exposed to it. For a directly attached USB printer, running KIVRA natively on the printer host is the supported default.
 - A successful TCP connection or visible USB queue only proves transport availability. Always run **Test Print** with the exact installed roll and confirm alignment before operational printing.
+- When KIVRA is hosted on Vercel but the printer remains connected to a Windows PC by USB, run `KIVRA Windows Print Bridge.exe` on that PC. Pair it from **More > Android Print Bridge**, select the installed Windows queue once, and keep the bridge running. Hosted USB jobs are then claimed securely and written to the local RAW queue.
 
 ## Vercel deployment
 

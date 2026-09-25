@@ -8,3 +8,5 @@ obj/
 *.db-wal
 *.log
 *.apk
+*.zip
+artifacts/

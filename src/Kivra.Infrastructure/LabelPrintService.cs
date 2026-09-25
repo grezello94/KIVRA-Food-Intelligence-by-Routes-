@@ -18,7 +18,7 @@ public sealed class LabelPrintService(KivraDbContext db, IExpiryCalculator expir
   var job = new PrintJob { Label = label, PrinterId = printer.Id, RequestedByUserId = request.RequestedByUserId, IdempotencyKey = request.IdempotencyKey, Status = PrintJobStatus.Queued };
   db.Add(job); db.Add(new AuditLog { UserId = request.RequestedByUserId, Action = "LabelCreated", EntityName = nameof(Label), EntityId = label.Id, NewValues = label.LabelCode }); await db.SaveChangesAsync(ct);
   job.Payload = tspl.Generate(label, printer, restaurantTimeZone);
-  if (printer.Driver == "AndroidBridge") { await db.SaveChangesAsync(ct); return new(label.Id, label.LabelCode, job.Id, job.Status, null, false); }
+  if (UsesBridge(printer)) { await db.SaveChangesAsync(ct); return new(label.Id, label.LabelCode, job.Id, job.Status, null, false); }
   job.Status = PrintJobStatus.Sending; job.StartedAt = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct);
   var implementation = Resolve(printer);
   var result = await implementation.PrintAsync(printer, job.Payload, ct); job.CompletedAt = DateTimeOffset.UtcNow;
@@ -31,8 +31,9 @@ public sealed class LabelPrintService(KivraDbContext db, IExpiryCalculator expir
   var prior = await db.PrintJobs.Include(x => x.Label).SingleOrDefaultAsync(x => x.IdempotencyKey == key, ct); if (prior is not null) return new(prior.LabelId, prior.Label!.LabelCode, prior.Id, prior.Status, prior.FailureReason, true);
   var label = await db.Labels.FindAsync([labelId], ct) ?? throw new KeyNotFoundException("Label not found."); var printer = await db.Printers.FindAsync([label.PrinterId], ct) ?? throw new KeyNotFoundException("Printer not found.");
   var job = new PrintJob { LabelId = label.Id, PrinterId = printer.Id, RequestedByUserId = userId, IdempotencyKey = key, IsReprint = true, Status = PrintJobStatus.Queued }; db.Add(job); job.Payload = tspl.Generate(label, printer, restaurantTimeZone); await db.SaveChangesAsync(ct);
-  if (printer.Driver == "AndroidBridge") { db.Add(new AuditLog { UserId = userId, Action = "LabelReprintQueued", EntityName = nameof(Label), EntityId = label.Id }); await db.SaveChangesAsync(ct); return new(label.Id, label.LabelCode, job.Id, job.Status, null, false); }
+  if (UsesBridge(printer)) { db.Add(new AuditLog { UserId = userId, Action = "LabelReprintQueued", EntityName = nameof(Label), EntityId = label.Id }); await db.SaveChangesAsync(ct); return new(label.Id, label.LabelCode, job.Id, job.Status, null, false); }
   job.Status=PrintJobStatus.Sending;job.StartedAt=DateTimeOffset.UtcNow;await db.SaveChangesAsync(ct);var implementation=Resolve(printer);var result = await implementation.PrintAsync(printer, job.Payload, ct); job.CompletedAt = DateTimeOffset.UtcNow; job.Status = result.Success ? PrintJobStatus.Printed : PrintJobStatus.Failed; job.FailureReason = result.Error; if (result.Success) { label.SuccessfulPrintCount++; label.LastSuccessfulPrintAt = job.CompletedAt; } db.Add(new AuditLog { UserId = userId, Action = "LabelReprinted", EntityName = nameof(Label), EntityId = label.Id }); await db.SaveChangesAsync(ct); return new(label.Id, label.LabelCode, job.Id, job.Status, job.FailureReason, false);
  }
  ILabelPrinter Resolve(Printer printer)=>printers.FirstOrDefault(x=>printer.Driver switch{"TscTsplNetwork"=>x is TscTsplNetworkPrinter,"TscTsplUsb"=>x is TscTsplUsbPrinter,"EpsonEscPosUsb"=>x is EpsonEscPosUsbPrinter,_=>x is FakeLabelPrinter})??throw new InvalidOperationException($"Printer driver '{printer.Driver}' is not registered.");
+ static bool UsesBridge(Printer printer)=>printer.Driver=="AndroidBridge"||(!OperatingSystem.IsWindows()&&printer.Driver is "TscTsplUsb" or "EpsonEscPosUsb");
 }

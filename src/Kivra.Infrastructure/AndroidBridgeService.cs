@@ -111,10 +111,13 @@ public sealed class AndroidBridgeService(KivraDbContext db)
         await db.SaveChangesAsync(ct);
 
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+        var supportedDrivers = string.Equals(device.Platform, "windows", StringComparison.OrdinalIgnoreCase)
+            ? new[] { "TscTsplUsb", "EpsonEscPosUsb" }
+            : new[] { "AndroidBridge" };
         var candidates = await (
             from job in db.PrintJobs
             join printer in db.Printers on job.PrinterId equals printer.Id
-            where printer.Driver == "AndroidBridge" && printer.Enabled &&
+            where supportedDrivers.Contains(printer.Driver) && printer.Enabled &&
                   (job.Status == PrintJobStatus.Queued || job.Status == PrintJobStatus.Sending)
             select new { Job = job, Printer = printer, Label = job.Label! })
             .ToListAsync(ct);
