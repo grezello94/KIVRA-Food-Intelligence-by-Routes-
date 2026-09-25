@@ -1,0 +1,8 @@
+.git
+.github
+.vercel
+android-bridge
+**/bin
+**/obj
+**/.dart_tool
+**/build

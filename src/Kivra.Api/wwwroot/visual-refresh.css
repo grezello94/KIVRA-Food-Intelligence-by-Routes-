@@ -111,6 +111,20 @@ html:not(.food-sprite-ready) .category-card.photo-card b{color:#31454e;text-shad
 .application-panel .settings-row i{color:#8a989e;font-size:20px}
 .signout-link{display:block;margin:18px auto 0;padding:10px 16px;border:0;background:transparent;color:#b21a2e;font-weight:750}
 .signout-link:hover{background:#fff0f2;border-radius:6px}
+.success-check.queued{background:#e8f1f4;color:#31515e;font-size:34px}
+.bridge-page{display:grid;gap:16px}
+.bridge-pair,.bridge-devices{margin:0}
+.bridge-pair .panel-heading .btn{width:auto;height:42px;padding:0 16px}
+.bridge-help{margin:0;padding:0 20px 20px;color:var(--muted);font-size:12px;line-height:1.55}
+.pairing-code{margin:0 20px 20px;padding:18px;display:grid;place-items:center;background:#f2f7f8;border:1px solid #d8e4e7;border-radius:8px}
+.pairing-code small,.pairing-code span{color:#6e7f87;font-size:11px}
+.pairing-code b{margin:5px 0;font:800 34px/1.1 ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:6px;color:#12313b}
+.refresh-bridge{width:38px;height:38px;border:1px solid #d8e2e6;border-radius:8px;font-size:22px}
+.bridge-device{min-height:72px;padding:12px 20px;display:grid;grid-template-columns:18px 1fr auto;align-items:center;gap:12px;border-top:1px solid #e3eaed}
+.bridge-device>span:nth-child(2) b,.bridge-device>span:nth-child(2) small{display:block}
+.bridge-device>span:nth-child(2) small{margin-top:4px;color:var(--muted);font-size:11px}
+.bridge-device .btn{width:auto;height:38px;padding:0 14px}
+@media(max-width:520px){.bridge-pair .panel-heading{align-items:flex-start;flex-direction:column}.bridge-pair .panel-heading .btn{width:100%}.bridge-device{grid-template-columns:18px 1fr}.bridge-device .btn{grid-column:2;justify-self:start}}
 .admin-toolbar{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:16px}
 .admin-toolbar .btn{width:auto;min-width:118px;padding:0 18px}
 .admin-search{height:46px;margin-bottom:12px;display:flex;align-items:center;gap:9px;padding:0 14px;background:#fff;border:1px solid #d8e2e6;border-radius:8px;color:#687a82}

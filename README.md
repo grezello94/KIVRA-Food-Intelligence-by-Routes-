@@ -14,8 +14,8 @@ Copy `.env.example` to `.env`, replace every placeholder with deployment-specifi
 
 ## Operations
 
-- The web UI serves as an installable PWA and talks only to the local API server; Android devices never connect directly to the printer.
-- Set printer `Driver` to `Fake` for safe development, or `TscTsplNetwork` for raw TCP TSPL. IP address, port, DPI, and label dimensions are saved per printer.
+- The web UI serves as an installable PWA. In hosted deployments, the dedicated Android bridge connects to both Vercel and the printer; ordinary staff phones never connect directly to the printer.
+- Set printer `Driver` to `Fake` for safe development, `TscTsplNetwork` for a locally hosted server, or `AndroidBridge` when the web app is hosted on Vercel. IP address, port, DPI, and label dimensions are saved per printer.
 - `POST /api/printers/{id}/test-connection` and `/test-print` are administrator operations. A failed print creates a failed print job; it never claims a successful label print.
 - The expiry worker runs every five minutes and changes active past-due labels to `Expired`, preserving history and emitting an internal notification.
 - The initial administrator PIN is supplied only through `BOOTSTRAP_ADMIN_PIN` / `Bootstrap__AdminPin`; no default PIN is embedded in the application.
@@ -32,7 +32,21 @@ Copy `.env.example` to `.env`, replace every placeholder with deployment-specifi
 
 The production application runs as an ASP.NET container on Vercel and stores persistent data in Neon PostgreSQL. Required production variables are `DATABASE_URL`, `Database__Provider=Postgres`, `Bootstrap__AdminPin`, and `PORT=8080`. The GitHub repository is connected to the `kivra-labels` Vercel project, so pushes to `main` create production deployments.
 
-Vercel cannot directly connect to a printer on a restaurant's private LAN or to a USB printer. The hosted UI, login, item management, and database remain available while the restaurant computer is off, but real print jobs require the planned local Print Bridge running on a computer or small always-on device on the printer's network. Until that bridge is implemented, keep production printers disabled and use the `Fake` driver for non-printing workflow tests.
+Vercel cannot directly connect to a printer on a restaurant's private LAN or to a USB printer. For production printing, configure the printer with the `AndroidBridge` driver and its reserved LAN IP address (normally port `9100`). The cloud service stores print jobs until a paired bridge claims them.
+
+## Android Print Bridge
+
+The companion source is in `android-bridge`. Build and install its release APK on a dedicated Android phone that remains on the same Wi-Fi as the printer:
+
+```sh
+cd android-bridge
+flutter pub get
+flutter build apk --release
+```
+
+In the web app, open **More > Android Print Bridge**, generate a six-digit code, and enter it in the phone app. Pairing codes are single-use and expire after ten minutes. The phone receives a device-specific token, keeps it in Android encrypted storage, and uses an Android connected-device foreground service to poll Vercel. It sends claimed TSPL jobs to the configured printer over TCP and acknowledges them only after the socket write succeeds.
+
+Allow notifications and exclude KIVRA Print Bridge from battery optimisation when Android asks. The bridge can restart after reboot, but the phone must remain powered, connected to the internet, and connected to the printer's Wi-Fi. Printer jobs remain durable in PostgreSQL while the phone is temporarily offline.
 
 ## Database migration workflow
 
