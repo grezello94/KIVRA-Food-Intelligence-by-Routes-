@@ -10,3 +10,6 @@ obj/
 *.apk
 *.zip
 artifacts/
+
+.vercel
+.env*.local

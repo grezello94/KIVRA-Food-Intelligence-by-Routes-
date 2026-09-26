@@ -1,6 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "services": {
+    "web": {
+      "root": "src/Kivra.Api/wwwroot"
+    },
     "api": {
       "root": ".",
       "entrypoint": "Dockerfile.vercel",
@@ -8,13 +11,20 @@
     }
   },
   "rewrites": [
-    { "source": "/(.*)", "destination": { "service": "api" } }
+    { "source": "/api/(.*)", "destination": { "service": "api" } },
+    { "source": "/(.*)", "destination": { "service": "web" } }
   ],
   "headers": [
     {
-      "source": "/assets/kitchen-food-sprite-v2.jpg",
+      "source": "/assets/(.*)",
       "headers": [
         { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+      ]
+    },
+    {
+      "source": "/(app.js|app.css|visual-refresh.css|printer.css|sw.js|index.html)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }
       ]
     }
   ]

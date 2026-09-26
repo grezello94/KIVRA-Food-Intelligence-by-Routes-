@@ -1,9 +1,11 @@
 .git
-.github
-.wrangler
-android-bridge
-cloudflare-worker
+.vercel
+.env*.local
 **/bin
 **/obj
-**/.dart_tool
-**/build
+android-bridge/.dart_tool
+android-bridge/build
+artifacts
+*.apk
+*.zip
+*.log
