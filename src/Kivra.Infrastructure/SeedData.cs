@@ -2,10 +2,27 @@ using Kivra.Domain;
 using Microsoft.EntityFrameworkCore;
 namespace Kivra.Infrastructure;
 public static class SeedData {
+ public static readonly string[] DefaultCategoryNames={"Prepared Food","Cut Vegetables","Raw Meat","Seafood","Sauces","Dry Stock","Dairy","Frozen Items","Gravy/Base","Other"};
+
+ public static async Task EnsureDefaultCategoriesAsync(KivraDbContext db,CancellationToken ct=default) {
+  var existing=await db.Categories.ToListAsync(ct);
+  foreach(var name in DefaultCategoryNames) {
+   var category=existing.FirstOrDefault(x=>string.Equals(x.Name.Trim(),name,StringComparison.OrdinalIgnoreCase));
+   if(category is null) {
+    category=new Category{Name=name};
+    db.Categories.Add(category);
+    existing.Add(category);
+   } else {
+    category.Name=name;
+    category.Active=true;
+    category.UpdatedAt=DateTimeOffset.UtcNow;
+   }
+  }
+  await db.SaveChangesAsync(ct);
+ }
+
  public static async Task EnsureSeededAsync(KivraDbContext db,string adminPin,CancellationToken ct=default) {
-  var categoryNames=new[]{"Prepared Food","Cut Vegetables","Raw Meat","Seafood","Sauces","Dry Stock","Dairy","Frozen Items","Gravy/Base","Other"};
-  var existingCategories=await db.Categories.ToListAsync(ct);
-  foreach(var name in categoryNames.Where(n=>existingCategories.All(x=>x.Name!=n)))db.Categories.Add(new Category{Name=name});
+  await EnsureDefaultCategoriesAsync(db,ct);
   var locationNames=new[]{"Chiller 1","Chiller 2","Chiller 3","Freezer 1","Freezer 2","Freezer 3","Dry Store","Preparation Area","Sauce Station"};
   var existingLocations=await db.StorageLocations.ToListAsync(ct);
   foreach(var name in locationNames.Where(n=>existingLocations.All(x=>x.Name!=n)))db.StorageLocations.Add(new StorageLocation{Name=name});
