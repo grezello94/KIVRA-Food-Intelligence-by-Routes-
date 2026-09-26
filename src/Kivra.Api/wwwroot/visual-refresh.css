@@ -182,6 +182,18 @@ html:not(.food-sprite-ready) .category-card.photo-card b{color:#31454e;text-shad
 @keyframes toast-check{from{transform:scale(.45) rotate(-18deg);opacity:0}to{transform:scale(1) rotate(0);opacity:1}}
 @media(max-width:520px){.toast{bottom:82px;min-height:62px;border-radius:14px;padding:10px 14px}.toast.success::before{width:38px;height:38px;flex-basis:38px;font-size:24px}}
 
+/* All-category dashboard with item and expiry totals. */
+.home-screen .category-grid{grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px}
+.home-screen .category-card.photo-card{aspect-ratio:5/3;min-height:118px;border-radius:12px}
+.home-screen .category-card.photo-card:after{background:linear-gradient(to top,rgba(3,9,13,.94) 0,rgba(3,9,13,.52) 54%,rgba(3,9,13,.06) 100%)}
+.home-screen .category-card.photo-card>b{left:11px;right:11px;bottom:42px;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.home-screen .category-card .category-counts{position:absolute;z-index:2;left:10px;right:10px;bottom:9px;top:auto;width:auto;height:auto;display:flex;align-items:center;justify-content:space-between;gap:5px;font-size:inherit;filter:none}
+.home-screen .category-card .category-counts small{display:block;max-width:none;margin:0;padding:4px 7px;border-radius:999px;background:#ffffffdf;color:#1a3039;font-size:9px;font-weight:850;line-height:1;letter-spacing:.01em;text-shadow:none;white-space:nowrap}
+.home-screen .category-card .category-counts .category-expiry{background:#6d7980e8;color:#fff}
+.home-screen .category-card .category-counts .category-expiry.has-expiry{background:#e51f3b;color:#fff;box-shadow:0 3px 9px #b60720aa}
+@media(min-width:760px){.home-screen .category-grid{grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.home-screen .category-card.photo-card{aspect-ratio:4/3;min-height:126px}}
+@media(max-width:380px){.home-screen .category-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.home-screen .category-card.photo-card{min-height:108px}.home-screen .category-card .category-counts small{padding:4px 5px;font-size:8px}}
+
 /* Keep the desktop printer state inside the home workspace, below the sticky header. */
 @media(min-width:760px){
   .home-hero{position:relative;padding-top:32px}
