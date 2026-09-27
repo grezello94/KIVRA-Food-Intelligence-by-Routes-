@@ -462,6 +462,57 @@ html:not(.food-sprite-ready) .category-card.photo-card b{color:#31454e;text-shad
 .recent-chevron{color:#849299;font-size:25px}
 @media(max-width:759px){.home-screen .recent-heading{align-items:center}.home-screen .recent-heading h2{font-size:18px}.home-screen .recent-heading p{display:none}.home-screen .recent-heading>button{font-size:11px}.home-screen .recent-list:not(.is-empty){border-radius:13px}.home-screen .recent-list .recent-row{min-height:76px;padding:10px 12px;gap:11px}.home-screen .recent-row .food-thumb{width:50px;height:50px;border-radius:11px}.home-screen .recent-row .row-copy b{font-size:14px}.home-screen .recent-row .row-copy small{font-size:10px}.home-screen .recent-row .quick-print{min-width:42px;width:42px;height:42px;padding:0;border-radius:10px;font-size:0}.home-screen .recent-row .quick-print span{font-size:17px}}
 
+/* Desktop home console: dark navigation, command bar, food-led welcome, and dense cards. */
+.home-commandbar,.welcome-banner,.category-section-heading{display:none}
+@media(min-width:760px){
+  body{background:#f5f7f9}
+  .bottom-nav{width:222px;padding:16px 12px 22px;background:linear-gradient(180deg,#0b121b,#101d29 62%,#0a1722);border:0;box-shadow:8px 0 28px #0c1b2914}
+  .bottom-nav:after{color:#718191;border-color:#ffffff12}
+  .bottom-nav .nav-brand{height:82px;margin:0 8px 18px;padding:0 8px 18px;border-color:#ffffff13}
+  .bottom-nav .nav-brand-logo{width:154px;filter:drop-shadow(0 5px 12px #0005)}
+  .bottom-nav button:not(.nav-brand){height:50px;min-height:50px;padding:0 16px;color:#c5cdd5;border-radius:10px}
+  .bottom-nav button:not(.nav-brand):hover{background:#ffffff0d;color:#fff}
+  .bottom-nav button:not(.nav-brand).active{background:linear-gradient(135deg,#ff3652,#ea1737);color:#fff;box-shadow:0 8px 22px #ef244047}
+  .screen,.home-screen{padding-left:222px!important}
+  .home-screen{background:radial-gradient(circle at 78% 0,#fff4f2 0,transparent 27%),#f7f8fa;min-height:100vh}
+  .home-screen .home-hero{padding:14px 30px 12px;background:transparent;color:#172830}
+  .home-screen .home-hero>*{width:100%;max-width:1280px;margin-left:auto;margin-right:auto}
+  .home-commandbar{display:flex!important;align-items:center;gap:14px;margin-bottom:13px!important}
+  .home-commandbar .search{flex:1;height:46px;margin:0;border:1px solid #dce4e8;border-radius:10px;box-shadow:0 5px 16px #18333e0c;background:#fff}
+  .home-commandbar .search kbd{padding:5px 8px;border:1px solid #e1e7ea;border-radius:6px;background:#f6f8f9;color:#87949a;font:700 10px/1 system-ui}
+  .home-test-print{height:46px;padding:0 20px;border:0;border-radius:10px;background:linear-gradient(135deg,#ff3150,#e81536);color:#fff;font-size:12px;font-weight:850;box-shadow:0 8px 20px #ef24402e}
+  .home-test-print span{margin-right:7px}
+  .welcome-banner{display:flex;align-items:center;justify-content:space-between;min-height:104px;margin-bottom:12px!important;padding:18px 22px;border-radius:13px;overflow:hidden;position:relative;background-image:linear-gradient(90deg,#071019e8 0%,#0a1117c7 46%,#0b111973 100%),url('/assets/kitchen-food-sprite-v2.webp');background-size:auto,400% 200%;background-position:center,66.667% 0;color:#fff;box-shadow:0 9px 24px #12263319}
+  .welcome-banner:after{content:"";position:absolute;inset:0;background:linear-gradient(105deg,transparent 45%,#ef24401c);pointer-events:none}
+  .welcome-banner .greeting{position:relative;z-index:1;min-height:0;margin:0;padding:0}
+  .welcome-banner .greeting h2{margin:0 0 5px;color:#fff;font-size:29px;letter-spacing:-.035em;text-shadow:0 2px 8px #0008}
+  .welcome-banner .greeting p{margin:0;color:#d7dfe4;font-size:12px}
+  .welcome-tip{position:relative;z-index:1;display:flex;align-items:center;gap:11px;width:290px;padding:12px 14px;border:1px solid #ffffff1e;border-radius:12px;background:#102235e8;box-shadow:0 7px 20px #0004}
+  .welcome-tip>span{display:grid;place-items:center;width:37px;height:37px;border-radius:50%;background:#efb81724;color:#ffd23f;font-size:22px}
+  .welcome-tip div{min-width:0}.welcome-tip b,.welcome-tip small{display:block}.welcome-tip b{font-size:12px}.welcome-tip small{margin-top:3px;color:#c3ced6;font-size:9px;line-height:1.4}
+  .category-section-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px!important}
+  .category-section-heading>div{display:flex;align-items:center;gap:8px}.category-section-heading h2{margin:0;font-size:18px}.category-section-heading>div>span{font-size:19px}
+  .category-section-heading button{border:0;background:transparent;color:#e91d3b;font-size:10px;font-weight:850}
+  .home-screen .category-grid{grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:9px;margin-top:0}
+  .home-screen .category-card{height:106px;min-width:0;aspect-ratio:auto;border:0;border-radius:11px;box-shadow:0 5px 15px #132b3517}
+  .home-screen .category-card:hover{transform:translateY(-2px);box-shadow:0 10px 22px #132b3526}
+  .home-screen .category-card:after{background:linear-gradient(180deg,#06101912 0%,#03090dd9 100%)}
+  .home-screen .category-card .category-icon{position:absolute;z-index:2;left:11px;top:10px;right:auto;display:grid;width:31px;height:31px;place-items:center;border-radius:9px;background:#ef2440e8;color:#fff;font-size:17px;filter:none;box-shadow:0 5px 12px #0004}
+  .home-screen .category-card>b{left:12px;bottom:29px;font-size:13px;max-width:calc(100% - 45px)}
+  .home-screen .category-card .category-counts{left:12px;right:10px;bottom:8px;justify-content:flex-start}
+  .home-screen .category-card .category-counts small{padding:0;background:transparent;color:#dce4e8;font-size:9px;text-shadow:0 1px 3px #000}
+  .home-screen .category-card .category-expiry{display:none!important}
+  .home-screen .category-card>i{position:absolute;z-index:2;right:9px;bottom:9px;display:grid;width:21px;height:21px;place-items:center;border-radius:50%;background:#ffffffdf;color:#24343b;font-style:normal;font-size:18px;line-height:1}
+  .home-screen .content-section{padding:4px 30px 34px;background:transparent}
+  .home-screen .recent-heading{margin-bottom:8px}.home-screen .recent-heading h2{font-size:17px}.home-screen .recent-heading p{display:none}
+  .home-screen .recent-list:not(.is-empty){display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;overflow:visible;border:0;border-radius:0;background:transparent;box-shadow:none}
+  .home-screen .recent-list .recent-row{display:grid;grid-template-columns:58px minmax(0,1fr);grid-template-rows:auto auto;min-height:94px;padding:10px;border:1px solid #dfe6e9!important;border-radius:11px!important;gap:4px 10px;box-shadow:0 6px 17px #18333e0b}
+  .home-screen .recent-row .food-thumb{grid-row:1/3;width:58px;height:58px;border-radius:10px}
+  .home-screen .recent-row .row-copy{align-self:end}.home-screen .recent-row .row-copy b{font-size:13px}.home-screen .recent-row .row-copy small{font-size:9px}.home-screen .recent-row .recent-status-dot{display:none}
+  .home-screen .recent-row .quick-print{align-self:start;justify-self:start;min-width:86px;padding:7px 10px;border:0;border-radius:7px;background:#ef2440;color:#fff;font-size:10px;box-shadow:none}
+  .home-screen .recent-row:hover .quick-print{background:#d91734;transform:none;box-shadow:none}
+}
+
 /* Responsive application system: the final layer intentionally normalises legacy screens. */
 :root{
   --app-sidebar:236px;
