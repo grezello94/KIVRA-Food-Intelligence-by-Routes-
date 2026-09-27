@@ -586,6 +586,7 @@ body,.app-shell{background:var(--app-canvas);color:var(--app-ink)}
 .user-create-panel{margin-bottom:16px}
 .user-directory{border-radius:var(--app-radius)}
 .about-logo{width:min(360px,78%);max-height:180px}
+.about-storage-check{display:block;width:min(280px,100%);margin:18px auto 0}
 @media(max-width:759px){
   .settings-grid{display:grid;grid-template-columns:1fr;gap:12px}
   .settings-panel{border-radius:var(--app-radius)}
