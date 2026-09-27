@@ -54,8 +54,13 @@ builder.Services.AddRateLimiter(options => options.AddFixedWindowLimiter("login"
 builder.Services.AddSingleton(TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")); builder.Services.AddScoped<IExpiryCalculator, ExpiryCalculator>(); builder.Services.AddSingleton<ILabelCodeGenerator, LabelCodeGenerator>(); builder.Services.AddSingleton<ITsplGenerator, TsplGenerator>(); builder.Services.AddSingleton<UsbPrinterCatalog>(); builder.Services.AddSingleton<ILabelPrinter, FakeLabelPrinter>(); builder.Services.AddSingleton<ILabelPrinter, TscTsplNetworkPrinter>(); builder.Services.AddSingleton<ILabelPrinter,TscTsplUsbPrinter>(); builder.Services.AddSingleton<ILabelPrinter,EpsonEscPosUsbPrinter>(); builder.Services.AddScoped<LabelPrintService>(); builder.Services.AddProblemDetails();
 builder.Services.AddDataProtection().PersistKeysToDbContext<KivraDbContext>(); builder.Services.AddScoped<IPinAuthentication,PinAuthentication>(); builder.Services.AddScoped<PrinterOperations>(); builder.Services.AddScoped<AndroidBridgeService>(); builder.Services.AddSingleton<PrinterDiscoveryService>(); builder.Services.AddHostedService<ExpiryNotificationWorker>(); builder.Services.AddAuthentication("Kivra").AddScheme<AuthenticationSchemeOptions,KivraAuthenticationHandler>("Kivra",null); builder.Services.AddAuthorization(o=> { o.FallbackPolicy=new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build(); o.AddPolicy("Staff",p=>p.RequireRole(nameof(UserRole.KitchenStaff),nameof(UserRole.Supervisor),nameof(UserRole.Administrator))); o.AddPolicy("Supervisor",p=>p.RequireRole(nameof(UserRole.Supervisor),nameof(UserRole.Administrator))); o.AddPolicy("Admin",p=>p.RequireRole(nameof(UserRole.Administrator))); });
 var app = builder.Build(); app.UseExceptionHandler(); app.UseDefaultFiles(); app.UseStaticFiles(); app.UseRateLimiter(); app.UseAuthentication(); app.UseAuthorization();
-using (var scope = app.Services.CreateScope())
+// Vercel starts the API container on demand and has a short readiness window.
+// Production migrations are already applied to Neon during release preparation;
+// running them again here can prevent the container from accepting any request.
+var isVercel = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("VERCEL"));
+if (!isVercel)
 {
+    using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<KivraDbContext>();
     if (db.Database.IsNpgsql())
         await db.Database.MigrateAsync();
