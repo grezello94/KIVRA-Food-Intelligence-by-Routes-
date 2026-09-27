@@ -440,6 +440,28 @@ html:not(.food-sprite-ready) .category-card.photo-card b{color:#31454e;text-shad
   .home-screen .category-card b{font-size:13px}
 }
 
+/* Home recent activity: one calm, cohesive card with clear reprint actions. */
+.home-screen .recent-heading{align-items:flex-end;margin-bottom:12px;padding:0}
+.home-screen .recent-heading h2{margin:0;color:#172830;font-size:22px;letter-spacing:-.025em}
+.home-screen .recent-heading p{margin:5px 0 0;color:#718087;font-size:12px}
+.home-screen .recent-heading>button{display:flex;align-items:center;gap:7px;padding:7px 0;color:#e51d39;font-size:12px;font-weight:800}
+.home-screen .recent-heading>button span{font-size:16px;transition:transform .15s}
+.home-screen .recent-heading>button:hover span{transform:translateX(3px)}
+.home-screen .recent-list:not(.is-empty){overflow:hidden;border:1px solid #dce5e8;border-radius:16px;background:#fff;box-shadow:0 12px 32px #18333e0b}
+.home-screen .recent-list .recent-row{min-height:92px;margin:0;padding:14px 18px;border:0;border-bottom:1px solid #e7edef;border-radius:0;background:#fff;box-shadow:none;color:#172830;gap:15px}
+.home-screen .recent-list .recent-row:last-child{border-bottom:0;border-radius:0}
+.home-screen .recent-list .recent-row:first-child{border-radius:0}
+.home-screen .recent-list .recent-row:hover{background:#fff8f9}
+.home-screen .recent-row .food-thumb{width:58px;height:58px;border-radius:13px;box-shadow:0 3px 10px #17283018,inset 0 0 0 1px #0000000d}
+.home-screen .recent-row .row-copy{gap:5px}
+.home-screen .recent-row .row-copy b{color:#172830;font-size:16px;font-weight:800;letter-spacing:-.015em}
+.home-screen .recent-row .row-copy small{display:flex;align-items:center;gap:7px;margin:0;color:#75858c;font-size:11px}
+.recent-status-dot{width:7px;height:7px;border-radius:50%;background:#18a84b;box-shadow:0 0 0 4px #18a84b12}
+.home-screen .recent-row .quick-print{display:flex;align-items:center;justify-content:center;gap:8px;min-width:116px;padding:10px 15px;border:1px solid #ef24402e;border-radius:10px;background:#fff1f3;color:#df1733;font-size:11px;font-weight:850;transition:background .15s,color .15s,transform .15s,box-shadow .15s}
+.home-screen .recent-row:hover .quick-print{background:#ef2440;color:#fff;box-shadow:0 7px 16px #ef244025;transform:translateY(-1px)}
+.recent-chevron{color:#849299;font-size:25px}
+@media(max-width:759px){.home-screen .recent-heading{align-items:center}.home-screen .recent-heading h2{font-size:18px}.home-screen .recent-heading p{display:none}.home-screen .recent-heading>button{font-size:11px}.home-screen .recent-list:not(.is-empty){border-radius:13px}.home-screen .recent-list .recent-row{min-height:76px;padding:10px 12px;gap:11px}.home-screen .recent-row .food-thumb{width:50px;height:50px;border-radius:11px}.home-screen .recent-row .row-copy b{font-size:14px}.home-screen .recent-row .row-copy small{font-size:10px}.home-screen .recent-row .quick-print{min-width:42px;width:42px;height:42px;padding:0;border-radius:10px;font-size:0}.home-screen .recent-row .quick-print span{font-size:17px}}
+
 /* Responsive application system: the final layer intentionally normalises legacy screens. */
 :root{
   --app-sidebar:236px;
