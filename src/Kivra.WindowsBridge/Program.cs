@@ -2,12 +2,22 @@ using System.Net.Http.Json;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Win32;
 
 if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("The KIVRA Windows Print Bridge requires Windows.");
 Console.Title = "KIVRA Windows Print Bridge";
-Console.WriteLine("KIVRA Windows Print Bridge\n");
+Console.WriteLine("KIVRA Windows Print Bridge - Easy USB Setup\n");
 
-var configPath = Path.Combine(AppContext.BaseDirectory, "windows-bridge.json");
+const string defaultServer = "https://kivra-labels.vercel.app";
+const string appVersion = "1.1.0";
+var configDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KIVRA", "PrintBridge");
+Directory.CreateDirectory(configDirectory);
+var configPath = Path.Combine(configDirectory, "windows-bridge.json");
+var legacyConfigPath = Path.Combine(AppContext.BaseDirectory, "windows-bridge.json");
+if (!File.Exists(configPath) && File.Exists(legacyConfigPath))
+{
+    File.Copy(legacyConfigPath, configPath);
+}
 var config = File.Exists(configPath)
     ? JsonSerializer.Deserialize<BridgeConfig>(File.ReadAllText(configPath), JsonOptions())
     : null;
@@ -16,35 +26,36 @@ using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
 if (config is null)
 {
     var queues = WindowsPrinter.GetQueues();
-    if (queues.Count == 0) throw new InvalidOperationException("Windows has no installed printer queues.");
-    Console.WriteLine("Installed printer queues:");
-    for (var i = 0; i < queues.Count; i++) Console.WriteLine($"  {i + 1}. {queues[i]}");
-    Console.Write("\nSelect queue number: ");
-    if (!int.TryParse(Console.ReadLine(), out var choice) || choice < 1 || choice > queues.Count) throw new InvalidOperationException("Invalid printer selection.");
-    Console.Write("KIVRA server [https://kivra-labels.vercel.app]: ");
-    var server = Console.ReadLine()?.Trim();
-    if (string.IsNullOrWhiteSpace(server)) server = "https://kivra-labels.vercel.app";
+    var queue = SelectPrinter(queues);
+    Console.WriteLine($"Printer found: {queue}");
     Console.Write("Six-digit pairing code: ");
     var code = Console.ReadLine()?.Trim() ?? string.Empty;
-    Console.Write("Bridge name [Kitchen Windows Bridge]: ");
-    var name = Console.ReadLine()?.Trim();
-    if (string.IsNullOrWhiteSpace(name)) name = "Kitchen Windows Bridge";
-    var pair = await Post<PairResponse>(http, $"{server.TrimEnd('/')}/api/bridge/pair", new { code, deviceName = name, appVersion = "1.0.0", platform = "windows" });
-    config = new(server.TrimEnd('/'), pair.Token, queues[choice - 1], name);
-    File.WriteAllText(configPath, JsonSerializer.Serialize(config, JsonOptions()));
-    Console.WriteLine("\nPaired successfully. Configuration saved beside this program.");
+    if (code.Length != 6 || !code.All(char.IsDigit)) throw new InvalidOperationException("Enter the six-digit code shown in KIVRA Settings > Print Bridge.");
+    var name = $"{Environment.MachineName} USB Print Bridge";
+    var pair = await Post<PairResponse>(http, $"{defaultServer}/api/bridge/pair", new { code, deviceName = name, appVersion, platform = "windows" });
+    config = new(defaultServer, pair.Token, queue, name);
+    SaveConfig(configPath, config);
+    EnableAutoStart();
+    Console.WriteLine("\nSetup complete. KIVRA will start this bridge automatically when you sign in to Windows.");
 }
+
+config = await WaitForPrinter(config, configPath);
 
 Console.WriteLine($"Server:  {config.Server}");
 Console.WriteLine($"Printer: {config.QueueName}");
-Console.WriteLine("Status:  Waiting for labels. Keep this window open.\n");
+Console.WriteLine("Status:  Ready. You may minimize this window.\n");
 http.DefaultRequestHeaders.Add("X-Kivra-Bridge-Token", config.Token);
 
 while (true)
 {
     try
     {
-        await Post<object>(http, $"{config.Server}/api/bridge/heartbeat", new { appVersion = "1.0.0" });
+        var availableQueues = WindowsPrinter.GetQueues();
+        if (!availableQueues.Contains(config.QueueName, StringComparer.OrdinalIgnoreCase))
+        {
+            config = await WaitForPrinter(config, configPath);
+        }
+        await Post<object>(http, $"{config.Server}/api/bridge/heartbeat", new { appVersion });
         using var response = await http.PostAsync($"{config.Server}/api/bridge/jobs/claim", null);
         if (response.StatusCode == System.Net.HttpStatusCode.NoContent) { await Task.Delay(3000); continue; }
         response.EnsureSuccessStatusCode();
@@ -58,6 +69,58 @@ while (true)
         Console.WriteLine($"{DateTime.Now:T} Bridge error: {ex.Message}");
         await Task.Delay(5000);
     }
+}
+
+static string SelectPrinter(IReadOnlyList<string> queues)
+{
+    if (queues.Count == 0) throw new InvalidOperationException("No Windows printer is installed. Connect the USB printer and install its Windows driver first.");
+    var detected = DetectTscPrinter(queues);
+    if (detected is not null) return detected;
+    if (queues.Count == 1) return queues[0];
+    Console.WriteLine("More than one printer was found:");
+    for (var i = 0; i < queues.Count; i++) Console.WriteLine($"  {i + 1}. {queues[i]}");
+    Console.Write("Select the USB label printer once: ");
+    if (!int.TryParse(Console.ReadLine(), out var choice) || choice < 1 || choice > queues.Count) throw new InvalidOperationException("Invalid printer selection.");
+    return queues[choice - 1];
+}
+
+static string? DetectTscPrinter(IReadOnlyList<string> queues)
+    => queues.FirstOrDefault(x => x.Contains("TA220", StringComparison.OrdinalIgnoreCase))
+       ?? queues.FirstOrDefault(x => x.Contains("TSC", StringComparison.OrdinalIgnoreCase));
+
+static async Task<BridgeConfig> WaitForPrinter(BridgeConfig config, string configPath)
+{
+    var notified = false;
+    while (true)
+    {
+        var queues = WindowsPrinter.GetQueues();
+        if (queues.Contains(config.QueueName, StringComparer.OrdinalIgnoreCase)) return config;
+        var replacement = DetectTscPrinter(queues);
+        if (replacement is not null)
+        {
+            config = config with { QueueName = replacement };
+            SaveConfig(configPath, config);
+            Console.WriteLine($"USB printer reconnected as: {replacement}");
+            return config;
+        }
+        if (!notified)
+        {
+            Console.WriteLine($"Waiting for USB printer '{config.QueueName}'. Connect it and switch it on; pairing is still saved.");
+            notified = true;
+        }
+        await Task.Delay(5000);
+    }
+}
+
+static void SaveConfig(string path, BridgeConfig config)
+    => File.WriteAllText(path, JsonSerializer.Serialize(config, JsonOptions()));
+
+static void EnableAutoStart()
+{
+    var executable = Environment.ProcessPath;
+    if (string.IsNullOrWhiteSpace(executable)) return;
+    using var key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
+    key?.SetValue("KIVRA Windows Print Bridge", $"\"{executable}\"");
 }
 
 static async Task<T> Post<T>(HttpClient http, string url, object body)
