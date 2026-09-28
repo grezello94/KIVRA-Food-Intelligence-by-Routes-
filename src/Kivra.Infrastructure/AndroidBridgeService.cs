@@ -110,50 +110,57 @@ public sealed class AndroidBridgeService(KivraDbContext db)
         }
         await db.SaveChangesAsync(ct);
 
-        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
-        var supportedDrivers = string.Equals(device.Platform, "windows", StringComparison.OrdinalIgnoreCase)
-            ? new[] { "TscTsplUsb", "EpsonEscPosUsb" }
-            : new[] { "AndroidBridge" };
-        var candidates = await (
-            from job in db.PrintJobs
-            join printer in db.Printers on job.PrinterId equals printer.Id
-            where supportedDrivers.Contains(printer.Driver) && printer.Enabled &&
-                  (job.Status == PrintJobStatus.Queued || job.Status == PrintJobStatus.Sending)
-            select new { Job = job, Printer = printer, Label = job.Label! })
-            .ToListAsync(ct);
-        var candidate = candidates
-            .Where(x => x.Job.Status == PrintJobStatus.Queued ||
-                        (x.Job.BridgeDeviceId == device.Id &&
-                         x.Job.LeaseExpiresAt < now &&
-                         x.Job.RetryCount < 3))
-            .OrderBy(x => x.Job.RequestedAt)
-            .FirstOrDefault();
-
-        if (candidate is null)
+        // Npgsql's retrying execution strategy requires user-created transactions
+        // to execute as one retriable unit. Starting the transaction outside the
+        // strategy causes every production bridge claim to fail with HTTP 500.
+        var strategy = db.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
         {
+            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+            var supportedDrivers = string.Equals(device.Platform, "windows", StringComparison.OrdinalIgnoreCase)
+                ? new[] { "TscTsplUsb", "EpsonEscPosUsb" }
+                : new[] { "AndroidBridge" };
+            var candidates = await (
+                from job in db.PrintJobs
+                join printer in db.Printers on job.PrinterId equals printer.Id
+                where supportedDrivers.Contains(printer.Driver) && printer.Enabled &&
+                      (job.Status == PrintJobStatus.Queued || job.Status == PrintJobStatus.Sending)
+                select new { Job = job, Printer = printer, Label = job.Label! })
+                .ToListAsync(ct);
+            var candidate = candidates
+                .Where(x => x.Job.Status == PrintJobStatus.Queued ||
+                            (x.Job.BridgeDeviceId == device.Id &&
+                             x.Job.LeaseExpiresAt < now &&
+                             x.Job.RetryCount < 3))
+                .OrderBy(x => x.Job.RequestedAt)
+                .FirstOrDefault();
+
+            if (candidate is null)
+            {
+                await transaction.CommitAsync(ct);
+                return null;
+            }
+
+            var retrying = candidate.Job.Status == PrintJobStatus.Sending;
+            candidate.Job.Status = PrintJobStatus.Sending;
+            candidate.Job.StartedAt ??= now;
+            candidate.Job.BridgeDeviceId = device.Id;
+            candidate.Job.LeaseExpiresAt = now.Add(LeaseLifetime);
+            candidate.Job.RetryCount += retrying ? 1 : 0;
+            candidate.Job.UpdatedAt = now;
+            await db.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
-            return null;
-        }
 
-        var retrying = candidate.Job.Status == PrintJobStatus.Sending;
-        candidate.Job.Status = PrintJobStatus.Sending;
-        candidate.Job.StartedAt ??= now;
-        candidate.Job.BridgeDeviceId = device.Id;
-        candidate.Job.LeaseExpiresAt = now.Add(LeaseLifetime);
-        candidate.Job.RetryCount += retrying ? 1 : 0;
-        candidate.Job.UpdatedAt = now;
-        await db.SaveChangesAsync(ct);
-        await transaction.CommitAsync(ct);
-
-        return new(
-            candidate.Job.Id,
-            candidate.Label.LabelCode,
-            candidate.Label.ItemNameSnapshot,
-            candidate.Printer.Name,
-            candidate.Printer.IpAddress,
-            candidate.Printer.TcpPort,
-            candidate.Job.Payload ?? string.Empty,
-            candidate.Job.LeaseExpiresAt.Value);
+            return new BridgeJob(
+                candidate.Job.Id,
+                candidate.Label.LabelCode,
+                candidate.Label.ItemNameSnapshot,
+                candidate.Printer.Name,
+                candidate.Printer.IpAddress,
+                candidate.Printer.TcpPort,
+                candidate.Job.Payload ?? string.Empty,
+                candidate.Job.LeaseExpiresAt.Value);
+        });
     }
 
     public async Task<bool> CompleteAsync(BridgeDevice device, Guid jobId, bool success, string? error, CancellationToken ct)
