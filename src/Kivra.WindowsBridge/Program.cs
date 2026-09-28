@@ -11,7 +11,7 @@ Console.Title = "KIVRA Windows Print Bridge";
 Console.WriteLine("KIVRA Windows Print Bridge - Easy USB Setup\n");
 
 const string defaultServer = "https://kivra-labels.vercel.app";
-const string appVersion = "1.2.0";
+const string appVersion = "1.3.0";
 var configDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KIVRA", "PrintBridge");
 Directory.CreateDirectory(configDirectory);
 var configPath = Path.Combine(configDirectory, "windows-bridge.json");
@@ -51,6 +51,7 @@ Console.WriteLine($"Server:  {config.Server}");
 Console.WriteLine($"Printer: {config.QueueName}");
 Console.WriteLine("Status:  Ready. You may minimize this window.\n");
 http.DefaultRequestHeaders.Add("X-Kivra-Bridge-Token", config.Token);
+var lastHeartbeat = DateTimeOffset.MinValue;
 
 while (true)
 {
@@ -61,9 +62,13 @@ while (true)
         {
             config = await WaitForPrinter(config, configPath);
         }
-        await Post<object>(http, $"{config.Server}/api/bridge/heartbeat", new { appVersion });
+        if (DateTimeOffset.UtcNow-lastHeartbeat>=TimeSpan.FromSeconds(20))
+        {
+            await Post<object>(http, $"{config.Server}/api/bridge/heartbeat", new { appVersion });
+            lastHeartbeat=DateTimeOffset.UtcNow;
+        }
         using var response = await http.PostAsync($"{config.Server}/api/bridge/jobs/claim", null);
-        if (response.StatusCode == System.Net.HttpStatusCode.NoContent) { await Task.Delay(3000); continue; }
+        if (response.StatusCode == System.Net.HttpStatusCode.NoContent) { await Task.Delay(500); continue; }
         response.EnsureSuccessStatusCode();
         var job = await response.Content.ReadFromJsonAsync<BridgeJob>(JsonOptions()) ?? throw new InvalidOperationException("The server returned an empty print job.");
         var error = WindowsPrinter.Send(config.QueueName, Encoding.ASCII.GetBytes(job.Payload));
