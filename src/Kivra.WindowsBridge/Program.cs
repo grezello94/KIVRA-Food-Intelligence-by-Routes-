@@ -5,11 +5,13 @@ using System.Text.Json;
 using Microsoft.Win32;
 
 if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("The KIVRA Windows Print Bridge requires Windows.");
+using var singleInstance = new Mutex(true, @"Local\KIVRA.WindowsPrintBridge", out var isFirstInstance);
+if (!isFirstInstance) return;
 Console.Title = "KIVRA Windows Print Bridge";
 Console.WriteLine("KIVRA Windows Print Bridge - Easy USB Setup\n");
 
 const string defaultServer = "https://kivra-labels.vercel.app";
-const string appVersion = "1.1.0";
+const string appVersion = "1.2.0";
 var configDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KIVRA", "PrintBridge");
 Directory.CreateDirectory(configDirectory);
 var configPath = Path.Combine(configDirectory, "windows-bridge.json");
@@ -21,6 +23,8 @@ if (!File.Exists(configPath) && File.Exists(legacyConfigPath))
 var config = File.Exists(configPath)
     ? JsonSerializer.Deserialize<BridgeConfig>(File.ReadAllText(configPath), JsonOptions())
     : null;
+var requiresSetup = config is null;
+if (!requiresSetup || args.Contains("--background", StringComparer.OrdinalIgnoreCase)) HideConsole();
 
 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
 if (config is null)
@@ -35,10 +39,12 @@ if (config is null)
     var pair = await Post<PairResponse>(http, $"{defaultServer}/api/bridge/pair", new { code, deviceName = name, appVersion, platform = "windows" });
     config = new(defaultServer, pair.Token, queue, name);
     SaveConfig(configPath, config);
-    EnableAutoStart();
     Console.WriteLine("\nSetup complete. KIVRA will start this bridge automatically when you sign in to Windows.");
+    await Task.Delay(1200);
+    HideConsole();
 }
 
+EnableAutoStart();
 config = await WaitForPrinter(config, configPath);
 
 Console.WriteLine($"Server:  {config.Server}");
@@ -119,8 +125,16 @@ static void EnableAutoStart()
 {
     var executable = Environment.ProcessPath;
     if (string.IsNullOrWhiteSpace(executable)) return;
+    var escapedExecutable = executable.Replace("'", "''");
+    var command = $"powershell.exe -NoProfile -WindowStyle Hidden -Command \"Start-Process -WindowStyle Hidden -FilePath '{escapedExecutable}' -ArgumentList '--background'\"";
     using var key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
-    key?.SetValue("KIVRA Windows Print Bridge", $"\"{executable}\"");
+    key?.SetValue("KIVRA Windows Print Bridge", command);
+}
+
+static void HideConsole()
+{
+    var window = NativeConsole.GetConsoleWindow();
+    if (window != IntPtr.Zero) NativeConsole.ShowWindow(window, 0);
 }
 
 static async Task<T> Post<T>(HttpClient http, string url, object body)
@@ -134,6 +148,12 @@ static JsonSerializerOptions JsonOptions() => new(JsonSerializerDefaults.Web) { 
 sealed record BridgeConfig(string Server, string Token, string QueueName, string DeviceName);
 sealed record PairResponse(Guid DeviceId, string DeviceName, string Token);
 sealed record BridgeJob(Guid JobId, string LabelCode, string ItemName, string PrinterName, string IpAddress, int TcpPort, string Payload, DateTimeOffset LeaseExpiresAt);
+
+static class NativeConsole
+{
+    [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr window, int command);
+}
 
 static class WindowsPrinter
 {

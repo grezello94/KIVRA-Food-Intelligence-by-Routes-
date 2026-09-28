@@ -54,7 +54,11 @@ html:not(.food-sprite-ready) .category-card.photo-card b{color:#31454e;text-shad
 .classification-dot.veg{background:#18ad40;border-color:#118d32}
 .classification-dot.non-veg{background:#e32435;border-color:#bb1726}
 .classification-dot.other{background:#fff;border:2px solid #687982}
-.label-classification{display:block;text-align:center;font-size:10px;font-weight:800;margin-top:3px}
+.label-classification{display:flex;align-items:center;justify-content:center;gap:4px;text-align:center;font-size:9px;font-weight:900;margin-top:3px;line-height:1}
+.label-classification.veg{color:#00a651}.label-classification.non-veg{color:#c51f35}
+.food-mark{width:14px;height:14px;border:2px solid currentColor;display:inline-grid;place-items:center;flex:0 0 auto}
+.food-mark.veg i{width:7px;height:7px;border-radius:50%;background:currentColor}
+.food-mark.non-veg i{width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-bottom:8px solid currentColor;transform:translateY(-1px)}
 .storage-location-control{max-width:780px;margin:14px auto 18px;padding:15px 17px;display:flex;align-items:center;gap:18px;background:#fff;border:1px solid #dce5e8;border-radius:8px}
 .storage-location-control>div{flex:1;min-width:0}
 .storage-location-control b,.storage-location-control small{display:block}

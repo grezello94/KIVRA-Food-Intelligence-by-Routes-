@@ -24,10 +24,24 @@ public sealed class TsplGenerator : ITsplGenerator {
   var titleCharDots=p.Dpi>=300?24:16;
   var name=Truncate(Clean(l.ItemNameSnapshot).ToUpperInvariant(),Math.Max(8,(widthDots-margin*2)/titleCharDots));
   var classification=l.ClassificationSnapshot switch{Classification.NonVeg=>"NON-VEG",Classification.Veg=>"VEG",Classification.Egg=>"EGG",_=>"OTHER"};
+  var markTop=Dot(4.5m);var markSize=Dot(3.2m);var markInset=Math.Max(1,Dot(.55m));var markStroke=Math.Max(1,Dot(.25m));
+  var classificationMark=l.ClassificationSnapshot switch
+  {
+   Classification.Veg =>
+    $"BOX {margin},{markTop},{margin+markSize},{markTop+markSize},{markStroke}\r\n"+
+    $"CIRCLE {margin+markInset},{markTop+markInset},{Math.Max(2,markSize-markInset*2)},{Math.Max(1,Dot(.65m))}\r\n",
+   Classification.NonVeg =>
+    $"BOX {margin},{markTop},{margin+markSize},{markTop+markSize},{markStroke}\r\n"+
+    $"DIAGONAL {margin+markSize/2},{markTop+markInset},{margin+markInset},{markTop+markSize-markInset},{Math.Max(1,Dot(.55m))}\r\n"+
+    $"DIAGONAL {margin+markInset},{markTop+markSize-markInset},{margin+markSize-markInset},{markTop+markSize-markInset},{Math.Max(1,Dot(.55m))}\r\n"+
+    $"DIAGONAL {margin+markSize-markInset},{markTop+markSize-markInset},{margin+markSize/2},{markTop+markInset},{Math.Max(1,Dot(.55m))}\r\n",
+   _ => string.Empty
+  };
   var media=p.MediaSensingMode switch{"BlackMark"=>$"BLINE {Num(p.GapMm)} mm,0 mm","Continuous"=>"GAP 0 mm,0 mm",_=>$"GAP {Num(p.GapMm)} mm,0 mm"};
   return $"SIZE {Num(p.LabelWidthMm)} mm,{Num(p.LabelHeightMm)} mm\r\n{media}\r\nSPEED {Num(p.PrintSpeedIps)}\r\nDENSITY {p.PrintDensity}\r\nSET RIBBON {(p.PrintMethod=="ThermalTransfer"?"ON":"OFF")}\r\nDIRECTION 1\r\nREFERENCE 0,0\r\nCLS\r\n"+
    $"TEXT {margin},{Dot(2)},\"{titleFont}\",0,1,1,\"{name}\"\r\n"+
-   $"TEXT {margin},{Dot(5.5m)},\"{bodyFont}\",0,1,1,\"{classification}\"\r\n"+
+   classificationMark+
+   $"TEXT {(l.ClassificationSnapshot is Classification.Veg or Classification.NonVeg?margin+markSize+Dot(1):margin)},{Dot(5.2m)},\"{bodyFont}\",0,1,1,\"{classification}\"\r\n"+
    $"BAR {margin},{Dot(8m)},{Math.Max(1,widthDots-margin*2)},1\r\n"+
    $"TEXT {margin},{Dot(8.8m)},\"{bodyFont}\",0,1,1,\"{Truncate(Clean(l.DateTerminologySnapshot).ToUpperInvariant(),9)}\"\r\n"+
    $"TEXT {valueX},{Dot(8.8m)},\"{bodyFont}\",0,1,1,\"{op:dd MMM yyyy}\"\r\n"+
