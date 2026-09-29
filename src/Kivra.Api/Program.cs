@@ -11,7 +11,9 @@ using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Data.Sqlite;
 using Npgsql;
+LoadDotEnv();
 var builder = WebApplication.CreateBuilder(args);
 // The Windows Event Log provider requires elevated permissions and can turn an
 // otherwise harmless log entry into a failed request for locally hosted KIVRA.
@@ -20,17 +22,39 @@ builder.Logging.AddConsole();
 var port = Environment.GetEnvironmentVariable("PORT");
 if (!string.IsNullOrWhiteSpace(port))
     builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
-var databaseUrl = builder.Configuration["DATABASE_URL"];
-var provider = builder.Configuration["Database:Provider"] ??
-    (!string.IsNullOrWhiteSpace(databaseUrl) ? "Postgres" : null);
+var databaseUrl = FirstNonBlank(builder.Configuration["DATABASE_URL"], Environment.GetEnvironmentVariable("DATABASE_URL"));
+var provider = FirstNonBlank(
+    builder.Configuration["Database:Provider"],
+    Environment.GetEnvironmentVariable("DATABASE_PROVIDER"),
+    !string.IsNullOrWhiteSpace(databaseUrl) ? "Postgres" : null);
 if (string.IsNullOrWhiteSpace(provider))
     throw new InvalidOperationException("Database:Provider must be configured.");
-var connectionString = builder.Configuration.GetConnectionString("Default");
+var connectionString = FirstNonBlank(builder.Configuration.GetConnectionString("Default"), Environment.GetEnvironmentVariable("ConnectionStrings__Default"));
 if (string.IsNullOrWhiteSpace(connectionString) && !string.IsNullOrWhiteSpace(databaseUrl))
     connectionString = PostgreSqlConnectionString(databaseUrl);
+if (string.IsNullOrWhiteSpace(connectionString) &&
+    provider.Equals("Postgres", StringComparison.OrdinalIgnoreCase))
+    connectionString = PostgreSqlConnectionStringFromEnvironment();
+if (string.IsNullOrWhiteSpace(connectionString) &&
+    provider.Equals("Sqlite", StringComparison.OrdinalIgnoreCase))
+{
+    var envPath = FindDotEnv();
+    var repositoryRoot = envPath is null
+        ? builder.Environment.ContentRootPath
+        : Path.GetDirectoryName(envPath)!;
+    connectionString = new SqliteConnectionStringBuilder
+    {
+        DataSource = Path.Combine(repositoryRoot, "src", "Kivra.Api", "kivra-native.db"),
+        Mode = SqliteOpenMode.ReadWriteCreate,
+        Cache = SqliteCacheMode.Shared,
+        Pooling = true,
+        ForeignKeys = true,
+        DefaultTimeout = 30
+    }.ConnectionString;
+}
 if (string.IsNullOrWhiteSpace(connectionString))
     throw new InvalidOperationException("ConnectionStrings:Default must be configured.");
-var adminPin = builder.Configuration["Bootstrap:AdminPin"];
+var adminPin = FirstNonBlank(builder.Configuration["Bootstrap:AdminPin"], Environment.GetEnvironmentVariable("BOOTSTRAP_ADMIN_PIN"));
 if (string.IsNullOrWhiteSpace(adminPin))
     throw new InvalidOperationException("Bootstrap:AdminPin must be configured for the initial administrator account.");
 builder.Services.AddDbContext<KivraDbContext>(o =>
@@ -53,6 +77,15 @@ builder.Services.AddRateLimiter(options => options.AddFixedWindowLimiter("login"
 }));
 builder.Services.AddSingleton(TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")); builder.Services.AddScoped<IExpiryCalculator, ExpiryCalculator>(); builder.Services.AddSingleton<ILabelCodeGenerator, LabelCodeGenerator>(); builder.Services.AddSingleton<ITsplGenerator, TsplGenerator>(); builder.Services.AddSingleton<UsbPrinterCatalog>(); builder.Services.AddSingleton<ILabelPrinter, FakeLabelPrinter>(); builder.Services.AddSingleton<ILabelPrinter, TscTsplNetworkPrinter>(); builder.Services.AddSingleton<ILabelPrinter,TscTsplUsbPrinter>(); builder.Services.AddSingleton<ILabelPrinter,EpsonEscPosUsbPrinter>(); builder.Services.AddScoped<LabelPrintService>(); builder.Services.AddProblemDetails();
 builder.Services.AddDataProtection().PersistKeysToDbContext<KivraDbContext>(); builder.Services.AddScoped<IPinAuthentication,PinAuthentication>(); builder.Services.AddScoped<PrinterOperations>(); builder.Services.AddScoped<AndroidBridgeService>(); builder.Services.AddSingleton<PrinterDiscoveryService>(); builder.Services.AddHostedService<ExpiryNotificationWorker>(); builder.Services.AddAuthentication("Kivra").AddScheme<AuthenticationSchemeOptions,KivraAuthenticationHandler>("Kivra",null); builder.Services.AddAuthorization(o=> { o.FallbackPolicy=new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build(); o.AddPolicy("Staff",p=>p.RequireRole(nameof(UserRole.KitchenStaff),nameof(UserRole.Supervisor),nameof(UserRole.Administrator))); o.AddPolicy("Supervisor",p=>p.RequireRole(nameof(UserRole.Supervisor),nameof(UserRole.Administrator))); o.AddPolicy("Admin",p=>p.RequireRole(nameof(UserRole.Administrator))); });
+builder.Services.AddSingleton<SqliteBackupState>();
+if (provider.Equals("Sqlite", StringComparison.OrdinalIgnoreCase))
+{
+    var sqliteDataSource = new SqliteConnectionStringBuilder(connectionString).DataSource;
+    var backupDirectory = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(sqliteDataSource))!, "backups");
+    builder.Services.AddSingleton(new SqliteBackupOptions(connectionString, backupDirectory));
+    builder.Services.AddSingleton<SqliteBackupService>();
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<SqliteBackupService>());
+}
 var app = builder.Build(); app.UseExceptionHandler(); app.UseDefaultFiles(); app.UseStaticFiles(); app.UseRateLimiter(); app.UseAuthentication(); app.UseAuthorization();
 // Vercel starts the API container on demand and has a short readiness window.
 // Production migrations are already applied to Neon during release preparation;
@@ -67,13 +100,19 @@ if (!isVercel)
     else
     {
         await db.Database.EnsureCreatedAsync();
+        await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL");
+        await db.Database.ExecuteSqlRawAsync("PRAGMA synchronous=FULL");
+        await db.Database.ExecuteSqlRawAsync("PRAGMA foreign_keys=ON");
+        await db.Database.ExecuteSqlRawAsync("PRAGMA busy_timeout=30000");
         await SchemaCompatibility.EnsureAsync(db);
     }
     await SeedData.EnsureSeededAsync(db, adminPin);
+    if (db.Database.IsSqlite())
+        await scope.ServiceProvider.GetRequiredService<SqliteBackupService>().CreateBackupAsync("startup", CancellationToken.None);
 }
 app.MapPost("/api/auth/pin", async (PinLoginRequest request, IPinAuthentication auth, CancellationToken ct) => { var user=await auth.AuthenticateAsync(request.Pin,ct); return user is null ? Results.Unauthorized() : Results.Ok(new { token=auth.IssueToken(user),user=new {user.Id,user.DisplayName,user.Role} }); }).RequireRateLimiting("login").AllowAnonymous();
-app.MapGet("/api/bootstrap",async(ClaimsPrincipal user,KivraDbContext db,CancellationToken ct)=>{var items=await db.Items.Include(x=>x.Category).Include(x=>x.DefaultStorageLocation).Where(x=>x.Active).OrderBy(x=>x.Name).Select(x=>new{x.Id,x.Name,x.ShortName,x.ImageDataUrl,x.CategoryId,x.Classification,x.LabelType,x.DateTerminology,x.ShelfLifeValue,x.ShelfLifeUnit,x.DefaultStorageLocationId,x.DefaultLabelTemplate,x.Active,Category=x.Category!.Name,Storage=x.DefaultStorageLocation!=null?x.DefaultStorageLocation.Name:null}).ToListAsync(ct);var printers=await db.Printers.Where(x=>x.Enabled).OrderBy(x=>x.Name).ToListAsync(ct);var locations=await db.StorageLocations.Where(x=>x.Active).OrderBy(x=>x.Name).ToListAsync(ct);var labels=await db.Labels.Include(x=>x.PrintJobs).OrderByDescending(x=>x.CreatedAt).Take(500).ToListAsync(ct);var categories=await db.Categories.Where(x=>x.Active).OrderBy(x=>x.Name).ToListAsync(ct);var history=labels.Select(x=>new LabelHistoryDto(x.Id,x.LabelCode,x.ItemNameSnapshot,x.OperationalDateTime,x.ExpiryDateTime,x.StorageLocationSnapshot,x.CurrentStatus,x.SuccessfulPrintCount,x.PrintJobs.OrderByDescending(j=>j.RequestedAt).Select(j=>(PrintJobStatus?)j.Status).FirstOrDefault()));var expiry=labels.Where(x=>x.CurrentStatus==LabelStatus.Active||x.CurrentStatus==LabelStatus.Expired).OrderBy(x=>x.ExpiryDateTime).Select(x=>new{x.Id,x.ItemNameSnapshot,x.LabelCode,x.OperationalDateTime,x.ExpiryDateTime,x.StorageLocationSnapshot,x.CurrentStatus});var admin=user.IsInRole(nameof(UserRole.Administrator));return Results.Ok(new{items,printers,locations,labels=history,expiry,categories,allPrinters=admin?await db.Printers.OrderBy(x=>x.Name).ToListAsync(ct):[],allLocations=admin?await db.StorageLocations.OrderBy(x=>x.Name).ToListAsync(ct):[],users=admin?await db.Users.OrderBy(x=>x.DisplayName).Select(x=>new{x.Id,x.DisplayName,x.Role,x.Active,x.CreatedAt}).ToListAsync(ct):[]});}).RequireAuthorization("Staff");
-app.MapGet("/api/system/storage",async(KivraDbContext db,CancellationToken ct)=>{if(!await db.Database.CanConnectAsync(ct))return Results.Problem("The production database is unavailable.",statusCode:503);var items=await db.Items.CountAsync(ct);var labels=await db.Labels.CountAsync(ct);var jobs=await db.PrintJobs.CountAsync(ct);return Results.Ok(new{healthy=true,provider=db.Database.ProviderName,items,labels,printJobs=jobs,checkedAt=DateTimeOffset.UtcNow});}).RequireAuthorization("Admin");
+app.MapGet("/api/bootstrap",async(ClaimsPrincipal user,KivraDbContext db,CancellationToken ct)=>{var items=await db.Items.Include(x=>x.Category).Include(x=>x.DefaultStorageLocation).Where(x=>x.Active).OrderBy(x=>x.Name).Select(x=>new{x.Id,x.Name,x.ShortName,x.ImageDataUrl,x.CategoryId,x.Classification,x.LabelType,x.DateTerminology,x.ShelfLifeValue,x.ShelfLifeUnit,x.DefaultStorageLocationId,x.DefaultLabelTemplate,x.Active,Category=x.Category!.Name,Storage=x.DefaultStorageLocation!=null?x.DefaultStorageLocation.Name:null}).ToListAsync(ct);var printers=await db.Printers.Where(x=>x.Enabled).OrderBy(x=>x.Name).ToListAsync(ct);var locations=await db.StorageLocations.Where(x=>x.Active).OrderBy(x=>x.Name).ToListAsync(ct);var labels=(await db.Labels.Include(x=>x.PrintJobs).ToListAsync(ct)).OrderByDescending(x=>x.CreatedAt).Take(500).ToList();var categories=await db.Categories.Where(x=>x.Active).OrderBy(x=>x.Name).ToListAsync(ct);var history=labels.Select(x=>new LabelHistoryDto(x.Id,x.LabelCode,x.ItemNameSnapshot,x.OperationalDateTime,x.ExpiryDateTime,x.StorageLocationSnapshot,x.CurrentStatus,x.SuccessfulPrintCount,x.PrintJobs.OrderByDescending(j=>j.RequestedAt).Select(j=>(PrintJobStatus?)j.Status).FirstOrDefault()));var expiry=labels.Where(x=>x.CurrentStatus==LabelStatus.Active||x.CurrentStatus==LabelStatus.Expired).OrderBy(x=>x.ExpiryDateTime).Select(x=>new{x.Id,x.ItemNameSnapshot,x.LabelCode,x.OperationalDateTime,x.ExpiryDateTime,x.StorageLocationSnapshot,x.CurrentStatus});var admin=user.IsInRole(nameof(UserRole.Administrator));return Results.Ok(new{items,printers,locations,labels=history,expiry,categories,allPrinters=admin?await db.Printers.OrderBy(x=>x.Name).ToListAsync(ct):[],allLocations=admin?await db.StorageLocations.OrderBy(x=>x.Name).ToListAsync(ct):[],users=admin?await db.Users.OrderBy(x=>x.DisplayName).Select(x=>new{x.Id,x.DisplayName,x.Role,x.Active,x.CreatedAt}).ToListAsync(ct):[]});}).RequireAuthorization("Staff");
+app.MapGet("/api/system/storage",async(KivraDbContext db,SqliteBackupState backups,CancellationToken ct)=>{if(!await db.Database.CanConnectAsync(ct))return Results.Problem("The production database is unavailable.",statusCode:503);var items=await db.Items.CountAsync(ct);var labels=await db.Labels.CountAsync(ct);var jobs=await db.PrintJobs.CountAsync(ct);return Results.Ok(new{healthy=true,provider=db.Database.ProviderName,items,labels,printJobs=jobs,backup=backups.Snapshot(),checkedAt=DateTimeOffset.UtcNow});}).RequireAuthorization("Admin");
 app.MapGet("/api/users", async (KivraDbContext db) => await db.Users.OrderBy(x=>x.DisplayName).Select(x=>new {x.Id,x.DisplayName,x.Role,x.Active,x.CreatedAt}).ToListAsync()).RequireAuthorization("Admin");
 app.MapPost("/api/users", async (CreateUserRequest request,KivraDbContext db) => { if(string.IsNullOrWhiteSpace(request.DisplayName)||request.Pin.Length<4)return Results.ValidationProblem(new Dictionary<string,string[]>{{"user",["Name and a PIN of at least four digits are required."]}}); var user=new User { DisplayName=request.DisplayName.Trim(),PinHash=PinAuthentication.Hash(request.Pin),Role=request.Role };db.Add(user);db.Add(new AuditLog { Action="UserCreated",EntityName="User",EntityId=user.Id,NewValues=$"{user.DisplayName}/{user.Role}" });await db.SaveChangesAsync();return Results.Created($"/api/users/{user.Id}",new {user.Id,user.DisplayName,user.Role});}).RequireAuthorization("Admin");
 app.MapPatch("/api/users/{id:guid}/active", async(Guid id,SetActiveRequest request,KivraDbContext db)=>{var user=await db.Users.FindAsync(id);if(user is null)return Results.NotFound();user.Active=request.Active;user.UpdatedAt=DateTimeOffset.UtcNow;db.Add(new AuditLog {Action=request.Active?"UserActivated":"UserDeactivated",EntityName="User",EntityId=id});await db.SaveChangesAsync();return Results.NoContent();}).RequireAuthorization("Admin");
@@ -129,6 +168,63 @@ static string PostgreSqlConnectionString(string value)
         Username = Uri.UnescapeDataString(userInfo[0]),
         Password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : string.Empty,
         SslMode = SslMode.Require,
+        Pooling = true,
+        MaxPoolSize = 10
+    }.ConnectionString;
+}
+static string? FirstNonBlank(params string?[] values) =>
+    values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+static void LoadDotEnv()
+{
+    var path = FindDotEnv();
+    if (path is null)
+        return;
+
+    foreach (var rawLine in File.ReadAllLines(path))
+    {
+        var line = rawLine.Trim();
+        if (line.Length == 0 || line.StartsWith('#'))
+            continue;
+        var separator = line.IndexOf('=');
+        if (separator <= 0)
+            continue;
+        var key = line[..separator].Trim();
+        var value = line[(separator + 1)..].Trim().Trim('"');
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(key)))
+            Environment.SetEnvironmentVariable(key, value);
+    }
+}
+static string? FindDotEnv()
+{
+    foreach (var start in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
+    {
+        var directory = new DirectoryInfo(start);
+        while (directory is not null)
+        {
+            var path = Path.Combine(directory.FullName, ".env");
+            if (File.Exists(path))
+                return path;
+            directory = directory.Parent;
+        }
+    }
+    return null;
+}
+static string? PostgreSqlConnectionStringFromEnvironment()
+{
+    var database = Environment.GetEnvironmentVariable("POSTGRES_DB");
+    var username = Environment.GetEnvironmentVariable("POSTGRES_USER");
+    var password = Environment.GetEnvironmentVariable("POSTGRES_PASSWORD");
+    if (string.IsNullOrWhiteSpace(database) ||
+        string.IsNullOrWhiteSpace(username) ||
+        string.IsNullOrWhiteSpace(password))
+        return null;
+    return new NpgsqlConnectionStringBuilder
+    {
+        Host = Environment.GetEnvironmentVariable("POSTGRES_HOST") ?? "localhost",
+        Port = int.TryParse(Environment.GetEnvironmentVariable("POSTGRES_PORT"), out var port) ? port : 5432,
+        Database = database,
+        Username = username,
+        Password = password,
         Pooling = true,
         MaxPoolSize = 10
     }.ConnectionString;

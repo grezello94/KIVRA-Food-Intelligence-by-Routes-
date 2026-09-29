@@ -817,6 +817,8 @@ h1,h2,h3,b,strong{letter-spacing:-.018em}
 }
 .settings-row:hover,.history-row:hover,.item-master-row:hover,.printer-list-row:hover,.list-row:hover{background:#fbf5f7!important}
 .field input,.field select,.admin-search,.category-search,.history-search,.search{border-color:var(--soft-line)!important;background:#fff!important;border-radius:12px!important}
+.inline-create-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;margin:-5px 0 16px;padding:12px;border:1px solid #ead4da;border-radius:12px;background:#fff8fa}.inline-create-row[hidden]{display:none}.inline-create-row input{min-width:0;height:46px;padding:0 12px;border:1px solid #d5e0e4;border-radius:10px;background:#fff}.inline-create-row .btn{height:46px;padding:0 18px}@media(max-width:520px){.inline-create-row{grid-template-columns:1fr}.inline-create-row .btn{width:100%}}
+.category-heading .category-add-item{margin-left:auto;min-width:190px;padding:0 18px}.category-heading>div{min-width:0}@media(max-width:640px){.category-heading{flex-wrap:wrap}.category-heading .category-add-item{width:100%;margin:10px 0 0}}
 .field input:focus,.field select:focus,.admin-search:focus-within,.search:focus-within{border-color:var(--wine)!important;box-shadow:0 0 0 4px #8f173714!important}
 .class-badge.non-veg{background:#f8e6ea!important;color:#941c39!important}.class-badge.veg{background:#e7f5ec!important;color:#147b43!important}
 .metric{border:1px solid transparent!important;border-radius:16px!important;box-shadow:0 8px 24px #2611180a!important}
