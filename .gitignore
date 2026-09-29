@@ -1,4 +1,5 @@
 .env
+.env.central
 .vercel/
 bin/
 obj/

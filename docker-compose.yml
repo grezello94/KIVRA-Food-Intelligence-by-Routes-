@@ -15,18 +15,27 @@ services:
   kivra:
     build: .
     restart: unless-stopped
+    env_file:
+      - path: .env.central
+        required: false
     depends_on:
       postgres:
         condition: service_healthy
     ports: ["8080:8080"]
     environment:
       Database__Provider: ${DATABASE_PROVIDER:?Set DATABASE_PROVIDER in .env}
-      ConnectionStrings__Default: Host=postgres;Port=5432;Database=${POSTGRES_DB:?Set POSTGRES_DB in .env};Username=${POSTGRES_USER:?Set POSTGRES_USER in .env};Password=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       Bootstrap__AdminPin: ${BOOTSTRAP_ADMIN_PIN:?Set BOOTSTRAP_ADMIN_PIN in .env}
       PrinterDiscovery__Networks: ${PRINTER_DISCOVERY_NETWORKS:-}
   postgres-backup:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     restart: unless-stopped
+    env_file:
+      - path: .env.central
+        required: false
     depends_on:
       postgres:
         condition: service_healthy
@@ -46,7 +55,11 @@ services:
           now=$$(date +%Y%m%d-%H%M%S);
           final="/backups/kivra-$${now}.dump";
           temp="$${final}.tmp";
-          pg_dump -h postgres -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" --format=custom --compress=6 --no-owner --no-acl --file "$$temp";
+          if [ -n "$${DATABASE_URL:-}" ]; then
+            pg_dump "$$DATABASE_URL" --format=custom --compress=6 --no-owner --no-acl --file "$$temp";
+          else
+            pg_dump -h postgres -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" --format=custom --compress=6 --no-owner --no-acl --file "$$temp";
+          fi;
           pg_restore --list "$$temp" >/dev/null;
           mv "$$temp" "$$final";
           daily="/backups/kivra-daily-$$(date +%Y%m%d).dump";
