@@ -24,5 +24,42 @@ services:
       ConnectionStrings__Default: Host=postgres;Port=5432;Database=${POSTGRES_DB:?Set POSTGRES_DB in .env};Username=${POSTGRES_USER:?Set POSTGRES_USER in .env};Password=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       Bootstrap__AdminPin: ${BOOTSTRAP_ADMIN_PIN:?Set BOOTSTRAP_ADMIN_PIN in .env}
       PrinterDiscovery__Networks: ${PRINTER_DISCOVERY_NETWORKS:-}
+  postgres-backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      BACKUP_INTERVAL_SECONDS: ${POSTGRES_BACKUP_INTERVAL_SECONDS:-3600}
+      BACKUP_KEEP_ROLLING: ${POSTGRES_BACKUP_KEEP_ROLLING:-168}
+      BACKUP_KEEP_DAILY: ${POSTGRES_BACKUP_KEEP_DAILY:-60}
+    volumes:
+      - postgres-backups:/backups
+    command: >
+      sh -c '
+        set -eu;
+        backup_once() {
+          now=$$(date +%Y%m%d-%H%M%S);
+          final="/backups/kivra-$${now}.dump";
+          temp="$${final}.tmp";
+          pg_dump -h postgres -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" --format=custom --compress=6 --no-owner --no-acl --file "$$temp";
+          pg_restore --list "$$temp" >/dev/null;
+          mv "$$temp" "$$final";
+          daily="/backups/kivra-daily-$$(date +%Y%m%d).dump";
+          [ -f "$$daily" ] || cp "$$final" "$$daily";
+          find /backups -maxdepth 1 -name "kivra-*.dump" ! -name "kivra-daily-*.dump" -type f | sort -r | tail -n +$$(($$BACKUP_KEEP_ROLLING + 1)) | xargs -r rm -f;
+          find /backups -maxdepth 1 -name "kivra-daily-*.dump" -type f | sort -r | tail -n +$$(($$BACKUP_KEEP_DAILY + 1)) | xargs -r rm -f;
+          echo "Verified PostgreSQL backup created: $$final";
+        };
+        while true; do
+          backup_once;
+          sleep "$$BACKUP_INTERVAL_SECONDS";
+        done
+      '
 volumes:
   postgres-data:
+  postgres-backups:

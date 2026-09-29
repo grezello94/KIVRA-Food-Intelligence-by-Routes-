@@ -19,6 +19,7 @@ Copy `.env.example` to `.env`, replace every placeholder with deployment-specifi
 - `POST /api/printers/{id}/test-connection` and `/test-print` are administrator operations. A failed print creates a failed print job; it never claims a successful label print.
 - The expiry worker runs every five minutes and changes active past-due labels to `Expired`, preserving history and emitting an internal notification.
 - The initial administrator PIN is supplied only through `BOOTSTRAP_ADMIN_PIN` / `Bootstrap__AdminPin`; no default PIN is embedded in the application.
+- Docker PostgreSQL deployments include an automatic `postgres-backup` service. It creates a verified `pg_dump` backup on startup and then every `POSTGRES_BACKUP_INTERVAL_SECONDS` seconds, storing dumps in the `postgres-backups` Docker volume. Defaults keep 168 rolling backups and 60 daily snapshots. Export them with `scripts/export-postgres-backups.sh`; restore a selected dump with `scripts/restore-postgres-backup.sh`.
 
 ## Real printer deployment
 
