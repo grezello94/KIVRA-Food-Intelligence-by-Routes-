@@ -8,7 +8,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
-const _defaultServer = 'https://kivra.example.com';
+const _defaultServer = 'https://kivralabels.redlanternrestaurant.in';
 const _tokenKey = 'bridge_token';
 const _serverKey = 'bridge_server';
 const _deviceNameKey = 'bridge_device_name';

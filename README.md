@@ -29,7 +29,7 @@ Copy `.env.example` to `.env`, replace every placeholder with deployment-specifi
 - Network printing uses raw TSPL over TCP, normally port `9100`. **Scan LAN** checks the API server interfaces, the connecting user's private `/24`, and `PRINTER_DISCOVERY_NETWORKS`. For Docker Desktop, set this variable to the restaurant LAN, for example `192.168.1.0/24`, because the container normally sees only its virtual network. Reserve the selected printer IP in DHCP.
 - USB printing is server-side, not browser-side. The TSC must be installed as a RAW Windows printer queue when KIVRA runs natively on Windows, or as a CUPS raw queue when KIVRA runs on Linux/macOS. A Docker container cannot see host USB queues unless CUPS is installed in the image and the host CUPS service/socket is explicitly exposed to it. For a directly attached USB printer, running KIVRA natively on the printer host is the supported default.
 - A successful TCP connection or visible USB queue only proves transport availability. Always run **Test Print** with the exact installed roll and confirm alignment before operational printing.
-- When KIVRA is hosted on Coolify but the printer remains connected to a Windows PC by USB, run `KIVRA Windows Print Bridge.exe` on that PC. Pair it from **More > Android Print Bridge**, select the installed Windows queue once, and keep the bridge running. Hosted USB jobs are then claimed securely and written to the local RAW queue.
+- When KIVRA is hosted on Coolify but the printer remains connected to a Windows PC by USB, run `KIVRA Windows Print Bridge.exe` on that PC once and pair it from **More > Print Bridge**. The bridge installs itself under the current user's local application data, starts silently at every Windows sign-in, remembers the selected queue, and waits for the Windows spooler/USB printer during boot. Hosted USB jobs are then claimed securely and written to the local RAW queue; Visual Studio is not required.
 
 ## Coolify deployment
 
@@ -61,7 +61,7 @@ Alternatively set `DATABASE_URL` to the PostgreSQL connection URL instead of the
 
 If the app is hosted on the Contabo server and the printer is still on a restaurant LAN or USB-attached computer, configure the printer with the `AndroidBridge` driver and its reserved LAN IP address (normally port `9100`). The Coolify service stores print jobs until a paired bridge claims them. If the Contabo server is on the same private network or connected by VPN to the printer LAN, `TscTsplNetwork` can print directly.
 
-After the Coolify domain is live, update any Android or Windows print bridge setup to use the new public KIVRA URL, then pair the bridge again from **More > Android Print Bridge**.
+The production bridge URL is `https://kivralabels.redlanternrestaurant.in`. After moving an existing installation from another server or local development, pair the bridge once again from **More > Print Bridge** because bridge credentials belong to the server database.
 
 ## Android Print Bridge
 

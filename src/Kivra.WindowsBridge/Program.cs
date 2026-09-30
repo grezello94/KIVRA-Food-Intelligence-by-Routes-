@@ -10,8 +10,8 @@ if (!isFirstInstance) return;
 Console.Title = "KIVRA Windows Print Bridge";
 Console.WriteLine("KIVRA Windows Print Bridge - Easy USB Setup\n");
 
-const string defaultServer = "https://kivra.example.com";
-const string appVersion = "1.3.0";
+const string defaultServer = "https://kivralabels.redlanternrestaurant.in";
+const string appVersion = "1.4.1";
 var configDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KIVRA", "PrintBridge");
 Directory.CreateDirectory(configDirectory);
 var configPath = Path.Combine(configDirectory, "windows-bridge.json");
@@ -44,7 +44,7 @@ if (config is null)
     HideConsole();
 }
 
-EnableAutoStart();
+InstallAndEnableAutoStart();
 config = await WaitForPrinter(config, configPath);
 
 Console.WriteLine($"Server:  {config.Server}");
@@ -104,20 +104,29 @@ static async Task<BridgeConfig> WaitForPrinter(BridgeConfig config, string confi
     var notified = false;
     while (true)
     {
-        var queues = WindowsPrinter.GetQueues();
-        if (queues.Contains(config.QueueName, StringComparer.OrdinalIgnoreCase)) return config;
-        var replacement = DetectTscPrinter(queues);
-        if (replacement is not null)
+        try
         {
-            config = config with { QueueName = replacement };
-            SaveConfig(configPath, config);
-            Console.WriteLine($"USB printer reconnected as: {replacement}");
-            return config;
+            var queues = WindowsPrinter.GetQueues();
+            if (queues.Contains(config.QueueName, StringComparer.OrdinalIgnoreCase)) return config;
+            var replacement = DetectTscPrinter(queues);
+            if (replacement is not null)
+            {
+                config = config with { QueueName = replacement };
+                SaveConfig(configPath, config);
+                Console.WriteLine($"USB printer reconnected as: {replacement}");
+                return config;
+            }
+            if (!notified)
+            {
+                Console.WriteLine($"Waiting for USB printer '{config.QueueName}'. Connect it and switch it on; pairing is still saved.");
+                notified = true;
+            }
         }
-        if (!notified)
+        catch (Exception ex)
         {
-            Console.WriteLine($"Waiting for USB printer '{config.QueueName}'. Connect it and switch it on; pairing is still saved.");
-            notified = true;
+            // The Windows spooler and USB driver can start later than logon. Never let
+            // that normal boot race terminate the bridge; keep retrying in background.
+            Console.WriteLine($"Waiting for Windows printing services: {ex.Message}");
         }
         await Task.Delay(5000);
     }
@@ -126,12 +135,27 @@ static async Task<BridgeConfig> WaitForPrinter(BridgeConfig config, string confi
 static void SaveConfig(string path, BridgeConfig config)
     => File.WriteAllText(path, JsonSerializer.Serialize(config, JsonOptions()));
 
-static void EnableAutoStart()
+static void InstallAndEnableAutoStart()
 {
-    var executable = Environment.ProcessPath;
-    if (string.IsNullOrWhiteSpace(executable)) return;
-    var escapedExecutable = executable.Replace("'", "''");
-    var command = $"powershell.exe -NoProfile -WindowStyle Hidden -Command \"Start-Process -WindowStyle Hidden -FilePath '{escapedExecutable}' -ArgumentList '--background'\"";
+    var runningExecutable = Environment.ProcessPath;
+    if (string.IsNullOrWhiteSpace(runningExecutable)) return;
+
+    // Always start from a stable per-user installation path. Registering a file in
+    // Downloads, an extracted ZIP, or Visual Studio's bin folder breaks as soon as
+    // that folder is moved, cleaned, or rebuilt.
+    var installDirectory = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "KIVRA", "PrintBridge", "app");
+    Directory.CreateDirectory(installDirectory);
+    var installedExecutable = Path.Combine(installDirectory, "KIVRA Windows Print Bridge.exe");
+    if (!Path.GetFullPath(runningExecutable).Equals(Path.GetFullPath(installedExecutable), StringComparison.OrdinalIgnoreCase))
+    {
+        File.Copy(runningExecutable, installedExecutable, overwrite: true);
+    }
+
+    // A direct, quoted command is more reliable at sign-in than a nested PowerShell
+    // command and does not depend on script policy or shell startup timing.
+    var command = $"\"{installedExecutable}\" --background";
     using var key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
     key?.SetValue("KIVRA Windows Print Bridge", command);
 }
