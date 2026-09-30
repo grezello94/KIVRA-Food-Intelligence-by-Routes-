@@ -10,7 +10,7 @@ if (!isFirstInstance) return;
 Console.Title = "KIVRA Windows Print Bridge";
 Console.WriteLine("KIVRA Windows Print Bridge - Easy USB Setup\n");
 
-const string defaultServer = "https://kivra-labels.vercel.app";
+const string defaultServer = "https://kivra.example.com";
 const string appVersion = "1.3.0";
 var configDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KIVRA", "PrintBridge");
 Directory.CreateDirectory(configDirectory);

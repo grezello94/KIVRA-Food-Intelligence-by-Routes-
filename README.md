@@ -14,8 +14,8 @@ Copy `.env.example` to `.env`, replace every placeholder with deployment-specifi
 
 ## Operations
 
-- The web UI serves as an installable PWA. In hosted deployments, the dedicated Android bridge connects to both Vercel and the printer; ordinary staff phones never connect directly to the printer.
-- Set printer `Driver` to `Fake` for safe development, `TscTsplNetwork` for a locally hosted server, or `AndroidBridge` when the web app is hosted on Vercel. IP address, port, DPI, and label dimensions are saved per printer.
+- The web UI serves as an installable PWA. In hosted deployments, the dedicated Android bridge connects to both the public KIVRA URL and the printer; ordinary staff phones never connect directly to the printer.
+- Set printer `Driver` to `Fake` for safe development, `TscTsplNetwork` when the server can reach the restaurant LAN, or `AndroidBridge` when the web app is hosted outside the restaurant network. IP address, port, DPI, and label dimensions are saved per printer.
 - `POST /api/printers/{id}/test-connection` and `/test-print` are administrator operations. A failed print creates a failed print job; it never claims a successful label print.
 - The expiry worker runs every five minutes and changes active past-due labels to `Expired`, preserving history and emitting an internal notification.
 - The initial administrator PIN is supplied only through `BOOTSTRAP_ADMIN_PIN` / `Bootstrap__AdminPin`; no default PIN is embedded in the application.
@@ -29,13 +29,39 @@ Copy `.env.example` to `.env`, replace every placeholder with deployment-specifi
 - Network printing uses raw TSPL over TCP, normally port `9100`. **Scan LAN** checks the API server interfaces, the connecting user's private `/24`, and `PRINTER_DISCOVERY_NETWORKS`. For Docker Desktop, set this variable to the restaurant LAN, for example `192.168.1.0/24`, because the container normally sees only its virtual network. Reserve the selected printer IP in DHCP.
 - USB printing is server-side, not browser-side. The TSC must be installed as a RAW Windows printer queue when KIVRA runs natively on Windows, or as a CUPS raw queue when KIVRA runs on Linux/macOS. A Docker container cannot see host USB queues unless CUPS is installed in the image and the host CUPS service/socket is explicitly exposed to it. For a directly attached USB printer, running KIVRA natively on the printer host is the supported default.
 - A successful TCP connection or visible USB queue only proves transport availability. Always run **Test Print** with the exact installed roll and confirm alignment before operational printing.
-- When KIVRA is hosted on Vercel but the printer remains connected to a Windows PC by USB, run `KIVRA Windows Print Bridge.exe` on that PC. Pair it from **More > Android Print Bridge**, select the installed Windows queue once, and keep the bridge running. Hosted USB jobs are then claimed securely and written to the local RAW queue.
+- When KIVRA is hosted on Coolify but the printer remains connected to a Windows PC by USB, run `KIVRA Windows Print Bridge.exe` on that PC. Pair it from **More > Android Print Bridge**, select the installed Windows queue once, and keep the bridge running. Hosted USB jobs are then claimed securely and written to the local RAW queue.
 
-## Vercel deployment
+## Coolify deployment
 
-The production application runs as an ASP.NET container on Vercel and stores persistent data in Neon PostgreSQL. Required production variables are `DATABASE_URL`, `Database__Provider=Postgres`, `Bootstrap__AdminPin`, and `PORT=8080`. The GitHub repository is connected to the `kivra-labels` Vercel project, so pushes to `main` create production deployments.
+The production application runs as one ASP.NET container on Coolify and serves both the API and static PWA. PostgreSQL should run as a persistent Coolify database resource on the Contabo server.
 
-Vercel cannot directly connect to a printer on a restaurant's private LAN or to a USB printer. For production printing, configure the printer with the `AndroidBridge` driver and its reserved LAN IP address (normally port `9100`). The cloud service stores print jobs until a paired bridge claims them.
+Create a new Coolify application from this Git repository:
+
+```txt
+Build Pack: Dockerfile
+Dockerfile: Dockerfile
+Port: 8080
+Health Check Path: /healthz
+```
+
+Attach a PostgreSQL database resource and set these application environment variables:
+
+```txt
+Database__Provider=Postgres
+POSTGRES_HOST=<coolify-postgres-host>
+POSTGRES_PORT=5432
+POSTGRES_DB=<database-name>
+POSTGRES_USER=<database-user>
+POSTGRES_PASSWORD=<database-password>
+Bootstrap__AdminPin=<secure-initial-admin-pin>
+PORT=8080
+```
+
+Alternatively set `DATABASE_URL` to the PostgreSQL connection URL instead of the individual `POSTGRES_*` values. On Coolify startup, KIVRA automatically applies committed PostgreSQL migrations and seeds the initial administrator account when needed.
+
+If the app is hosted on the Contabo server and the printer is still on a restaurant LAN or USB-attached computer, configure the printer with the `AndroidBridge` driver and its reserved LAN IP address (normally port `9100`). The Coolify service stores print jobs until a paired bridge claims them. If the Contabo server is on the same private network or connected by VPN to the printer LAN, `TscTsplNetwork` can print directly.
+
+After the Coolify domain is live, update any Android or Windows print bridge setup to use the new public KIVRA URL, then pair the bridge again from **More > Android Print Bridge**.
 
 ## Android Print Bridge
 
@@ -47,7 +73,7 @@ flutter pub get
 flutter build apk --release
 ```
 
-In the web app, open **More > Android Print Bridge**, generate a six-digit code, and enter it in the phone app. Pairing codes are single-use and expire after ten minutes. The phone receives a device-specific token, keeps it in Android encrypted storage, and uses an Android connected-device foreground service to poll Vercel. It sends claimed TSPL jobs to the configured printer over TCP and acknowledges them only after the socket write succeeds.
+In the web app, open **More > Android Print Bridge**, generate a six-digit code, and enter it in the phone app. Pairing codes are single-use and expire after ten minutes. The phone receives a device-specific token, keeps it in Android encrypted storage, and uses an Android connected-device foreground service to poll the KIVRA server. It sends claimed TSPL jobs to the configured printer over TCP and acknowledges them only after the socket write succeeds.
 
 Allow notifications and exclude KIVRA Print Bridge from battery optimisation when Android asks. The bridge can restart after reboot, but the phone must remain powered, connected to the internet, and connected to the printer's Wi-Fi. Printer jobs remain durable in PostgreSQL while the phone is temporarily offline.
 

@@ -10,8 +10,9 @@ service and a TSC/TSPL network printer on the same local Wi-Fi.
 3. Enter the six-digit code and tap **Pair and start bridge**.
 4. Allow notifications and exclude the app from battery optimisation when asked.
 
-The bridge polls Vercel over HTTPS, sends queued TSPL to the printer over TCP
-port 9100, and acknowledges each job only after the socket write succeeds.
+The bridge polls the hosted KIVRA URL over HTTPS, sends queued TSPL to the
+printer over TCP port 9100, and acknowledges each job only after the socket
+write succeeds.
 
 ## Build
 

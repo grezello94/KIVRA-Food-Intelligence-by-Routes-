@@ -8,7 +8,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
-const _defaultServer = 'https://kivra-labels.vercel.app';
+const _defaultServer = 'https://kivra.example.com';
 const _tokenKey = 'bridge_token';
 const _serverKey = 'bridge_server';
 const _deviceNameKey = 'bridge_device_name';
@@ -191,7 +191,7 @@ class PrintBridgeTaskHandler extends TaskHandler {
     } on SocketException catch (error) {
       await _publish(_friendlyError(error), false);
     } on TimeoutException {
-      await _publish('Vercel is not reachable', false);
+      await _publish('KIVRA server is not reachable', false);
     } catch (error) {
       await _publish(_friendlyError(error), false);
     } finally {
@@ -463,7 +463,7 @@ class _BridgeHomePageState extends State<BridgeHomePage> {
 
   Future<void> _checkNow() async {
     FlutterForegroundTask.sendDataToTask('poll');
-    setState(() => _status = 'Checking Vercel and printer queue');
+    setState(() => _status = 'Checking KIVRA server and printer queue');
   }
 
   Future<void> _guard(Future<void> Function() action) async {
