@@ -1,6 +1,5 @@
 .env
 .env.central
-.vercel/
 bin/
 obj/
 *.user
@@ -13,5 +12,4 @@ obj/
 !src/Kivra.Api/wwwroot/downloads/*.zip
 artifacts/
 
-.vercel
 .env*.local

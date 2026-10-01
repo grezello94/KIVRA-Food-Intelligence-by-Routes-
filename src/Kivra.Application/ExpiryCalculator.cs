@@ -1,6 +1,13 @@
 using Kivra.Domain;
 namespace Kivra.Application;
 public interface IExpiryCalculator { DateTimeOffset Calculate(DateTimeOffset operationalTime, int value, ShelfLifeUnit unit, TimeZoneInfo timeZone); }
+public static class RestaurantOperationalDay {
+ public const int RolloverHour = 2;
+ public static DateTimeOffset Resolve(DateTimeOffset actualTime, TimeZoneInfo timeZone) {
+  var local = TimeZoneInfo.ConvertTime(actualTime, timeZone);
+  return local.Hour < RolloverHour ? local.AddDays(-1) : local;
+ }
+}
 public sealed class ExpiryCalculator : IExpiryCalculator {
  public DateTimeOffset Calculate(DateTimeOffset operationalTime, int value, ShelfLifeUnit unit, TimeZoneInfo timeZone) {
   if (value < 0) throw new ArgumentOutOfRangeException(nameof(value));

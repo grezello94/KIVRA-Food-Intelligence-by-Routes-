@@ -1,6 +1,5 @@
 .git
 .github
-.vercel
 android-bridge
 **/bin
 **/obj

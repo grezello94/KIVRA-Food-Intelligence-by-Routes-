@@ -12,8 +12,14 @@ public sealed class LabelPrintService(KivraDbContext db, IExpiryCalculator expir
   var locationId = request.StorageLocationId ?? item.DefaultStorageLocationId;
   var location = locationId is null ? null : await db.StorageLocations.SingleOrDefaultAsync(x => x.Id == locationId && x.Active, ct);
   if (location is null) throw new InvalidOperationException("Select an active storage location before printing.");
-  var operational = (request.OperationalDateTime ?? DateTimeOffset.UtcNow).ToUniversalTime();
-  var local = TimeZoneInfo.ConvertTime(operational, restaurantTimeZone); var todayStart = new DateTimeOffset(local.Year, local.Month, local.Day, 0, 0, 0, local.Offset); var todayStartUtc=todayStart.ToUniversalTime();var sequence=(db.Database.IsSqlite()?(await db.Labels.Select(x=>x.CreatedAt).ToListAsync(ct)).Count(x=>x>=todayStartUtc):await db.Labels.CountAsync(x=>x.CreatedAt>=todayStartUtc,ct))+1;
+  var actual = request.OperationalDateTime ?? DateTimeOffset.UtcNow;
+  var local = RestaurantOperationalDay.Resolve(actual, restaurantTimeZone);
+  var operational = local.ToUniversalTime();
+  var dayStart = new DateTimeOffset(local.Year, local.Month, local.Day, 0, 0, 0, local.Offset).ToUniversalTime();
+  var dayEnd = dayStart.AddDays(1);
+  var sequence = (db.Database.IsSqlite()
+   ? (await db.Labels.Select(x => x.OperationalDateTime).ToListAsync(ct)).Count(x => x >= dayStart && x < dayEnd)
+   : await db.Labels.CountAsync(x => x.OperationalDateTime >= dayStart && x.OperationalDateTime < dayEnd, ct)) + 1;
   var expiryTime = expiry.Calculate(operational, item.ShelfLifeValue, item.ShelfLifeUnit, restaurantTimeZone).ToUniversalTime();
   var label = new Label { LabelCode = codes.Next(local, sequence), ItemId = item.Id, ItemNameSnapshot = item.Name, CategorySnapshot = item.Category?.Name ?? "Uncategorized", ClassificationSnapshot = item.Classification, DateTerminologySnapshot = item.DateTerminology, OperationalDateTime = operational, ExpiryDateTime = expiryTime, ShelfLifeRuleSnapshot = $"{item.ShelfLifeValue} {item.ShelfLifeUnit}", StorageLocationId = location.Id, StorageLocationSnapshot = location.Name, Quantity = request.Quantity, Unit = request.Unit, CreatedByUserId = request.RequestedByUserId, PrinterId = printer.Id };
   var job = new PrintJob { Label = label, PrinterId = printer.Id, RequestedByUserId = request.RequestedByUserId, IdempotencyKey = request.IdempotencyKey, Status = PrintJobStatus.Queued, Payload = tspl.Generate(label, printer, restaurantTimeZone) };
