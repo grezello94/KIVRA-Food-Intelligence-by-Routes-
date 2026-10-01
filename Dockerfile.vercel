@@ -1,7 +1,7 @@
 FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 WORKDIR /source
 COPY . .
-RUN dotnet restore Kivra.sln \
+RUN dotnet restore src/Kivra.Api/Kivra.Api.csproj \
     && dotnet publish src/Kivra.Api/Kivra.Api.csproj -c Release -o /app/publish --no-restore /p:UseAppHost=false
 
 FROM mcr.microsoft.com/dotnet/aspnet:9.0-noble
