@@ -4,185 +4,252 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Win32;
 
-if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("The KIVRA Windows Print Bridge requires Windows.");
-using var singleInstance = new Mutex(true, @"Local\KIVRA.WindowsPrintBridge", out var isFirstInstance);
-if (!isFirstInstance) return;
-Console.Title = "KIVRA Windows Print Bridge";
-Console.WriteLine("KIVRA Windows Print Bridge - Easy USB Setup\n");
+namespace Kivra.WindowsBridge;
 
-const string defaultServer = "https://kivralabels.redlanternrestaurant.in";
-const string appVersion = "1.4.1";
-var configDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KIVRA", "PrintBridge");
-Directory.CreateDirectory(configDirectory);
-var configPath = Path.Combine(configDirectory, "windows-bridge.json");
-var legacyConfigPath = Path.Combine(AppContext.BaseDirectory, "windows-bridge.json");
-if (!File.Exists(configPath) && File.Exists(legacyConfigPath))
+static class Program
 {
-    File.Copy(legacyConfigPath, configPath);
-}
-var config = File.Exists(configPath)
-    ? JsonSerializer.Deserialize<BridgeConfig>(File.ReadAllText(configPath), JsonOptions())
-    : null;
-var requiresSetup = config is null;
-if (!requiresSetup || args.Contains("--background", StringComparer.OrdinalIgnoreCase)) HideConsole();
-
-using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-if (config is null)
-{
-    var queues = WindowsPrinter.GetQueues();
-    var queue = SelectPrinter(queues);
-    Console.WriteLine($"Printer found: {queue}");
-    Console.Write("Six-digit pairing code: ");
-    var code = Console.ReadLine()?.Trim() ?? string.Empty;
-    if (code.Length != 6 || !code.All(char.IsDigit)) throw new InvalidOperationException("Enter the six-digit code shown in KIVRA Settings > Print Bridge.");
-    var name = $"{Environment.MachineName} USB Print Bridge";
-    var pair = await Post<PairResponse>(http, $"{defaultServer}/api/bridge/pair", new { code, deviceName = name, appVersion, platform = "windows" });
-    config = new(defaultServer, pair.Token, queue, name);
-    SaveConfig(configPath, config);
-    Console.WriteLine("\nSetup complete. KIVRA will start this bridge automatically when you sign in to Windows.");
-    await Task.Delay(1200);
-    HideConsole();
-}
-
-InstallAndEnableAutoStart();
-config = await WaitForPrinter(config, configPath);
-
-Console.WriteLine($"Server:  {config.Server}");
-Console.WriteLine($"Printer: {config.QueueName}");
-Console.WriteLine("Status:  Ready. You may minimize this window.\n");
-http.DefaultRequestHeaders.Add("X-Kivra-Bridge-Token", config.Token);
-var lastHeartbeat = DateTimeOffset.MinValue;
-
-while (true)
-{
-    try
+    [STAThread]
+    static void Main()
     {
-        var availableQueues = WindowsPrinter.GetQueues();
-        if (!availableQueues.Contains(config.QueueName, StringComparer.OrdinalIgnoreCase))
-        {
-            config = await WaitForPrinter(config, configPath);
-        }
-        if (DateTimeOffset.UtcNow-lastHeartbeat>=TimeSpan.FromSeconds(20))
-        {
-            await Post<object>(http, $"{config.Server}/api/bridge/heartbeat", new { appVersion });
-            lastHeartbeat=DateTimeOffset.UtcNow;
-        }
-        using var response = await http.PostAsync($"{config.Server}/api/bridge/jobs/claim", null);
-        if (response.StatusCode == System.Net.HttpStatusCode.NoContent) { await Task.Delay(500); continue; }
-        response.EnsureSuccessStatusCode();
-        var job = await response.Content.ReadFromJsonAsync<BridgeJob>(JsonOptions()) ?? throw new InvalidOperationException("The server returned an empty print job.");
-        var error = WindowsPrinter.Send(config.QueueName, Encoding.ASCII.GetBytes(job.Payload));
-        await Post<object>(http, $"{config.Server}/api/bridge/jobs/{job.JobId}/complete", new { success = error is null, error });
-        Console.WriteLine(error is null ? $"{DateTime.Now:T} Printed {job.ItemName} ({job.LabelCode})" : $"{DateTime.Now:T} Print failed: {error}");
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"{DateTime.Now:T} Bridge error: {ex.Message}");
-        await Task.Delay(5000);
+        using var instance = new Mutex(true, @"Local\KIVRA.WindowsPrintBridge", out var first);
+        if (!first) return;
+        ApplicationConfiguration.Initialize();
+        Application.Run(new BridgeContext());
     }
 }
 
-static string SelectPrinter(IReadOnlyList<string> queues)
+sealed class BridgeContext : ApplicationContext
 {
-    if (queues.Count == 0) throw new InvalidOperationException("No Windows printer is installed. Connect the USB printer and install its Windows driver first.");
-    var detected = DetectTscPrinter(queues);
-    if (detected is not null) return detected;
-    if (queues.Count == 1) return queues[0];
-    Console.WriteLine("More than one printer was found:");
-    for (var i = 0; i < queues.Count; i++) Console.WriteLine($"  {i + 1}. {queues[i]}");
-    Console.Write("Select the USB label printer once: ");
-    if (!int.TryParse(Console.ReadLine(), out var choice) || choice < 1 || choice > queues.Count) throw new InvalidOperationException("Invalid printer selection.");
-    return queues[choice - 1];
-}
+    const string Server = "https://kivralabels.redlanternrestaurant.in";
+    const string Version = "1.5.0";
+    readonly string dataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KIVRA", "PrintBridge");
+    readonly HttpClient http = new() { Timeout = TimeSpan.FromSeconds(30) };
+    readonly CancellationTokenSource stopping = new();
+    readonly NotifyIcon tray;
+    readonly ToolStripMenuItem statusMenu;
+    readonly SynchronizationContext ui;
+    StatusForm? statusForm;
+    BridgeConfig? config;
+    string status = "Starting…";
+    bool offline;
 
-static string? DetectTscPrinter(IReadOnlyList<string> queues)
-    => queues.FirstOrDefault(x => x.Contains("TA220", StringComparison.OrdinalIgnoreCase))
-       ?? queues.FirstOrDefault(x => x.Contains("TSC", StringComparison.OrdinalIgnoreCase));
+    string ConfigPath => Path.Combine(dataDirectory, "windows-bridge.json");
+    string LogPath => Path.Combine(dataDirectory, "bridge.log");
 
-static async Task<BridgeConfig> WaitForPrinter(BridgeConfig config, string configPath)
-{
-    var notified = false;
-    while (true)
+    public BridgeContext()
+    {
+        Directory.CreateDirectory(dataDirectory);
+        ui = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
+        statusMenu = new ToolStripMenuItem(status) { Enabled = false };
+        var menu = new ContextMenuStrip();
+        menu.Items.Add(statusMenu);
+        menu.Items.Add("Open status", null, (_, _) => ShowStatus());
+        menu.Items.Add("Open log", null, (_, _) => OpenLog());
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Exit", null, (_, _) => ExitBridge());
+        tray = new NotifyIcon { Icon = SystemIcons.Application, Text = "KIVRA Print Bridge — Starting", ContextMenuStrip = menu, Visible = true };
+        tray.DoubleClick += (_, _) => ShowStatus();
+        _ = StartAsync();
+    }
+
+    async Task StartAsync()
     {
         try
         {
-            var queues = WindowsPrinter.GetQueues();
-            if (queues.Contains(config.QueueName, StringComparer.OrdinalIgnoreCase)) return config;
-            var replacement = DetectTscPrinter(queues);
-            if (replacement is not null)
+            MigrateLegacyConfig();
+            config = LoadConfig();
+            if (config is null)
             {
-                config = config with { QueueName = replacement };
-                SaveConfig(configPath, config);
-                Console.WriteLine($"USB printer reconnected as: {replacement}");
-                return config;
+                var setup = ShowSetup();
+                if (setup is null) { ExitBridge(); return; }
+                SetStatus("Pairing with KIVRA…");
+                var pair = await Post<PairResponse>($"{Server}/api/bridge/pair", new { code = setup.Value.Code, deviceName = $"{Environment.MachineName} USB Print Bridge", appVersion = Version, platform = "windows" });
+                config = new(Server, pair.Token, setup.Value.Queue, pair.DeviceName);
+                SaveConfig(config);
+                Notify("Setup complete", "KIVRA Print Bridge will now run quietly in the notification area.", ToolTipIcon.Info);
             }
-            if (!notified)
-            {
-                Console.WriteLine($"Waiting for USB printer '{config.QueueName}'. Connect it and switch it on; pairing is still saved.");
-                notified = true;
-            }
+            InstallAutoStart();
+            http.DefaultRequestHeaders.Add("X-Kivra-Bridge-Token", config.Token);
+            await RunAsync(config, stopping.Token);
         }
+        catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
         catch (Exception ex)
         {
-            // The Windows spooler and USB driver can start later than logon. Never let
-            // that normal boot race terminate the bridge; keep retrying in background.
-            Console.WriteLine($"Waiting for Windows printing services: {ex.Message}");
+            Log($"Fatal error: {ex}");
+            ui.Post(_ =>
+            {
+                MessageBox.Show($"KIVRA Print Bridge could not start.\n\n{ex.Message}\n\nDetails: {LogPath}", "KIVRA Print Bridge", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                ExitBridge();
+            }, null);
         }
-        await Task.Delay(5000);
     }
-}
 
-static void SaveConfig(string path, BridgeConfig config)
-    => File.WriteAllText(path, JsonSerializer.Serialize(config, JsonOptions()));
-
-static void InstallAndEnableAutoStart()
-{
-    var runningExecutable = Environment.ProcessPath;
-    if (string.IsNullOrWhiteSpace(runningExecutable)) return;
-
-    // Always start from a stable per-user installation path. Registering a file in
-    // Downloads, an extracted ZIP, or Visual Studio's bin folder breaks as soon as
-    // that folder is moved, cleaned, or rebuilt.
-    var installDirectory = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "KIVRA", "PrintBridge", "app");
-    Directory.CreateDirectory(installDirectory);
-    var installedExecutable = Path.Combine(installDirectory, "KIVRA Windows Print Bridge.exe");
-    if (!Path.GetFullPath(runningExecutable).Equals(Path.GetFullPath(installedExecutable), StringComparison.OrdinalIgnoreCase))
+    async Task RunAsync(BridgeConfig current, CancellationToken token)
     {
-        File.Copy(runningExecutable, installedExecutable, overwrite: true);
+        var lastHeartbeat = DateTimeOffset.MinValue;
+        while (!token.IsCancellationRequested)
+        {
+            try
+            {
+                var queues = WindowsPrinter.GetQueues();
+                if (!queues.Contains(current.QueueName, StringComparer.OrdinalIgnoreCase))
+                {
+                    var replacement = DetectTsc(queues);
+                    if (replacement is null)
+                    {
+                        SetStatus($"Waiting for printer: {current.QueueName}");
+                        await Task.Delay(5000, token);
+                        continue;
+                    }
+                    current = current with { QueueName = replacement };
+                    config = current;
+                    SaveConfig(current);
+                    Log($"USB printer reconnected as: {replacement}");
+                }
+                if (DateTimeOffset.UtcNow - lastHeartbeat >= TimeSpan.FromSeconds(20))
+                {
+                    await Post<object>($"{current.Server}/api/bridge/heartbeat", new { appVersion = Version }, token);
+                    lastHeartbeat = DateTimeOffset.UtcNow;
+                }
+                if (offline) { offline = false; Notify("Connection restored", "KIVRA Print Bridge is connected again.", ToolTipIcon.Info); }
+                SetStatus($"Ready — {current.QueueName}");
+                using var response = await http.PostAsync($"{current.Server}/api/bridge/jobs/claim", null, token);
+                if (response.StatusCode == System.Net.HttpStatusCode.NoContent) { await Task.Delay(500, token); continue; }
+                response.EnsureSuccessStatusCode();
+                var job = await response.Content.ReadFromJsonAsync<BridgeJob>(JsonOptions(), token) ?? throw new InvalidOperationException("The server returned an empty print job.");
+                var error = WindowsPrinter.Send(current.QueueName, Encoding.ASCII.GetBytes(job.Payload));
+                await Post<object>($"{current.Server}/api/bridge/jobs/{job.JobId}/complete", new { success = error is null, error }, token);
+                Log(error is null ? $"Printed {job.ItemName} ({job.LabelCode})" : $"Print failed: {error}");
+                if (error is not null) Notify("Print failed", error, ToolTipIcon.Error);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { break; }
+            catch (Exception ex)
+            {
+                Log($"Bridge error: {ex.Message}");
+                SetStatus("Offline — retrying automatically");
+                if (!offline) { offline = true; Notify("Connection interrupted", "KIVRA cannot reach the server. It will keep retrying in the background.", ToolTipIcon.Warning); }
+                await Task.Delay(5000, token);
+            }
+        }
     }
 
-    // A direct, quoted command is more reliable at sign-in than a nested PowerShell
-    // command and does not depend on script policy or shell startup timing.
-    var command = $"\"{installedExecutable}\" --background";
-    using var key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
-    key?.SetValue("KIVRA Windows Print Bridge", command);
+    (string Code, string Queue)? ShowSetup()
+    {
+        using var form = new SetupForm(WindowsPrinter.GetQueues());
+        return form.ShowDialog() == DialogResult.OK ? (form.PairingCode, form.QueueName) : null;
+    }
+
+    void ShowStatus()
+    {
+        if (statusForm is null || statusForm.IsDisposed) statusForm = new StatusForm();
+        statusForm.UpdateStatus(status, config?.Server ?? Server, config?.QueueName ?? "Not configured", LogPath);
+        statusForm.Show();
+        statusForm.Activate();
+    }
+
+    void SetStatus(string value) => ui.Post(_ =>
+    {
+        status = value;
+        statusMenu.Text = value;
+        var tip = $"KIVRA Print Bridge — {value}";
+        tray.Text = tip[..Math.Min(63, tip.Length)];
+        statusForm?.UpdateStatus(status, config?.Server ?? Server, config?.QueueName ?? "Not configured", LogPath);
+    }, null);
+
+    void Notify(string title, string message, ToolTipIcon icon) => ui.Post(_ => tray.ShowBalloonTip(5000, title, message, icon), null);
+    void OpenLog()
+    {
+        if (!File.Exists(LogPath)) File.WriteAllText(LogPath, "KIVRA Print Bridge log\r\n");
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(LogPath) { UseShellExecute = true });
+    }
+    void ExitBridge()
+    {
+        stopping.Cancel();
+        tray.Visible = false;
+        tray.Dispose();
+        ExitThread();
+    }
+    void Log(string message)
+    {
+        try { File.AppendAllText(LogPath, $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss zzz} {message}{Environment.NewLine}"); } catch { }
+    }
+    void MigrateLegacyConfig()
+    {
+        var legacy = Path.Combine(AppContext.BaseDirectory, "windows-bridge.json");
+        if (!File.Exists(ConfigPath) && File.Exists(legacy)) File.Copy(legacy, ConfigPath);
+    }
+    BridgeConfig? LoadConfig() => File.Exists(ConfigPath) ? JsonSerializer.Deserialize<BridgeConfig>(File.ReadAllText(ConfigPath), JsonOptions()) : null;
+    void SaveConfig(BridgeConfig value) => File.WriteAllText(ConfigPath, JsonSerializer.Serialize(value, JsonOptions()));
+    static string? DetectTsc(IReadOnlyList<string> queues) => queues.FirstOrDefault(x => x.Contains("TA220", StringComparison.OrdinalIgnoreCase)) ?? queues.FirstOrDefault(x => x.Contains("TSC", StringComparison.OrdinalIgnoreCase));
+
+    static void InstallAutoStart()
+    {
+        var running = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(running)) return;
+        var directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KIVRA", "PrintBridge", "app");
+        Directory.CreateDirectory(directory);
+        var installed = Path.Combine(directory, "KIVRA Windows Print Bridge.exe");
+        if (!Path.GetFullPath(running).Equals(Path.GetFullPath(installed), StringComparison.OrdinalIgnoreCase)) File.Copy(running, installed, true);
+        using var key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
+        key?.SetValue("KIVRA Windows Print Bridge", $"\"{installed}\" --background");
+    }
+    async Task<T> Post<T>(string url, object body, CancellationToken token = default)
+    {
+        using var response = await http.PostAsJsonAsync(url, body, JsonOptions(), token);
+        if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"Server returned {(int)response.StatusCode}: {await response.Content.ReadAsStringAsync(token)}");
+        if (typeof(T) == typeof(object)) return (T)new object();
+        return await response.Content.ReadFromJsonAsync<T>(JsonOptions(), token) ?? throw new InvalidOperationException("Server returned an empty response.");
+    }
+    static JsonSerializerOptions JsonOptions() => new(JsonSerializerDefaults.Web) { WriteIndented = true };
 }
 
-static void HideConsole()
+sealed class SetupForm : Form
 {
-    var window = NativeConsole.GetConsoleWindow();
-    if (window != IntPtr.Zero) NativeConsole.ShowWindow(window, 0);
+    readonly TextBox code = new() { MaxLength = 6, Dock = DockStyle.Fill };
+    readonly ComboBox printers = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
+    public string PairingCode => code.Text.Trim();
+    public string QueueName => printers.SelectedItem?.ToString() ?? "";
+    public SetupForm(IReadOnlyList<string> queues)
+    {
+        Text = "Set up KIVRA Print Bridge"; ClientSize = new Size(460, 245); FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false; StartPosition = FormStartPosition.CenterScreen;
+        foreach (var queue in queues) printers.Items.Add(queue);
+        var detected = queues.FirstOrDefault(x => x.Contains("TA220", StringComparison.OrdinalIgnoreCase)) ?? queues.FirstOrDefault(x => x.Contains("TSC", StringComparison.OrdinalIgnoreCase));
+        if (detected is not null) printers.SelectedItem = detected; else if (printers.Items.Count > 0) printers.SelectedIndex = 0;
+        var ok = new Button { Text = "Connect", AutoSize = true };
+        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, AutoSize = true };
+        ok.Click += (_, _) =>
+        {
+            if (PairingCode.Length != 6 || !PairingCode.All(char.IsDigit)) { MessageBox.Show("Enter the six-digit code shown in KIVRA Settings > Print Bridge."); return; }
+            if (QueueName.Length == 0) { MessageBox.Show("Connect and install the USB printer first."); return; }
+            DialogResult = DialogResult.OK;
+        };
+        AcceptButton = ok; CancelButton = cancel;
+        var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft }; buttons.Controls.Add(ok); buttons.Controls.Add(cancel);
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(18), ColumnCount = 1, RowCount = 6 };
+        layout.Controls.Add(new Label { Text = "Choose the USB label printer and enter the pairing code from KIVRA.", AutoSize = true });
+        layout.Controls.Add(new Label { Text = "Printer", AutoSize = true, Margin = new Padding(3, 14, 3, 3) }); layout.Controls.Add(printers);
+        layout.Controls.Add(new Label { Text = "Six-digit pairing code", AutoSize = true, Margin = new Padding(3, 14, 3, 3) }); layout.Controls.Add(code); layout.Controls.Add(buttons); Controls.Add(layout);
+    }
 }
 
-static async Task<T> Post<T>(HttpClient http, string url, object body)
+sealed class StatusForm : Form
 {
-    using var response = await http.PostAsJsonAsync(url, body, JsonOptions());
-    if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"Server returned {(int)response.StatusCode}: {await response.Content.ReadAsStringAsync()}");
-    if (typeof(T) == typeof(object)) return (T)new object();
-    return await response.Content.ReadFromJsonAsync<T>(JsonOptions()) ?? throw new InvalidOperationException("Server returned an empty response.");
+    readonly Label state = new() { AutoSize = true, Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold) };
+    readonly Label details = new() { AutoSize = true, MaximumSize = new Size(520, 0) };
+    public StatusForm()
+    {
+        Text = "KIVRA Print Bridge"; ClientSize = new Size(560, 190); StartPosition = FormStartPosition.CenterScreen; FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false;
+        var hide = new Button { Text = "Hide", AutoSize = true }; hide.Click += (_, _) => Hide();
+        var layout = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, Padding = new Padding(20), WrapContents = false };
+        layout.Controls.Add(new Label { Text = "KIVRA Windows Print Bridge", AutoSize = true, Font = new Font(SystemFonts.DefaultFont.FontFamily, 14, FontStyle.Bold) }); layout.Controls.Add(state); layout.Controls.Add(details); layout.Controls.Add(hide); Controls.Add(layout);
+        FormClosing += (_, e) => { if (e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); } };
+    }
+    public void UpdateStatus(string value, string server, string printer, string log) { state.Text = value; details.Text = $"Printer: {printer}\nServer: {server}\n\nThe bridge keeps running when this window is hidden.\nLog: {log}"; }
 }
-static JsonSerializerOptions JsonOptions() => new(JsonSerializerDefaults.Web) { WriteIndented = true };
+
 sealed record BridgeConfig(string Server, string Token, string QueueName, string DeviceName);
 sealed record PairResponse(Guid DeviceId, string DeviceName, string Token);
 sealed record BridgeJob(Guid JobId, string LabelCode, string ItemName, string PrinterName, string IpAddress, int TcpPort, string Payload, DateTimeOffset LeaseExpiresAt);
-
-static class NativeConsole
-{
-    [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
-    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr window, int command);
-}
 
 static class WindowsPrinter
 {
@@ -197,39 +264,18 @@ static class WindowsPrinter
     [DllImport("winspool.drv", SetLastError = true)] static extern bool StartPagePrinter(IntPtr handle);
     [DllImport("winspool.drv", SetLastError = true)] static extern bool EndPagePrinter(IntPtr handle);
     [DllImport("winspool.drv", SetLastError = true)] static extern bool WritePrinter(IntPtr handle, IntPtr bytes, int count, out int written);
-
     public static IReadOnlyList<string> GetQueues()
     {
-        EnumPrinters(Local | Connections, null, 4, IntPtr.Zero, 0, out var needed, out _);
-        if (needed == 0) return [];
+        EnumPrinters(Local | Connections, null, 4, IntPtr.Zero, 0, out var needed, out _); if (needed == 0) return [];
         if (Marshal.GetLastWin32Error() != InsufficientBuffer) throw Error("enumerate printer queues");
         var buffer = Marshal.AllocHGlobal(needed);
-        try
-        {
-            if (!EnumPrinters(Local | Connections, null, 4, buffer, needed, out _, out var returned)) throw Error("enumerate printer queues");
-            var size = Marshal.SizeOf<PrinterInfo4>(); var result = new List<string>(returned);
-            for (var i = 0; i < returned; i++) { var info = Marshal.PtrToStructure<PrinterInfo4>(IntPtr.Add(buffer, i * size)); var name = Marshal.PtrToStringUni(info.PrinterName); if (!string.IsNullOrWhiteSpace(name)) result.Add(name); }
-            return result.OrderBy(x => x).ToList();
-        }
+        try { if (!EnumPrinters(Local | Connections, null, 4, buffer, needed, out _, out var returned)) throw Error("enumerate printer queues"); var size = Marshal.SizeOf<PrinterInfo4>(); var result = new List<string>(returned); for (var i = 0; i < returned; i++) { var info = Marshal.PtrToStructure<PrinterInfo4>(IntPtr.Add(buffer, i * size)); var name = Marshal.PtrToStringUni(info.PrinterName); if (!string.IsNullOrWhiteSpace(name)) result.Add(name); } return result.OrderBy(x => x).ToList(); }
         finally { Marshal.FreeHGlobal(buffer); }
     }
-
     public static string? Send(string queue, byte[] payload)
     {
         if (!OpenPrinter(queue, out var handle, IntPtr.Zero)) return Error("open printer").Message;
-        try
-        {
-            var info = new DocInfo { DocumentName = "KIVRA Cloud Label", DataType = "RAW" };
-            if (StartDocPrinter(handle, 1, ref info) == 0) return Error("start document").Message;
-            try
-            {
-                if (!StartPagePrinter(handle)) return Error("start page").Message;
-                var memory = Marshal.AllocCoTaskMem(payload.Length);
-                try { Marshal.Copy(payload, 0, memory, payload.Length); return WritePrinter(handle, memory, payload.Length, out var written) && written == payload.Length ? null : Error("write label").Message; }
-                finally { Marshal.FreeCoTaskMem(memory); EndPagePrinter(handle); }
-            }
-            finally { EndDocPrinter(handle); }
-        }
+        try { var info = new DocInfo { DocumentName = "KIVRA Cloud Label", DataType = "RAW" }; if (StartDocPrinter(handle, 1, ref info) == 0) return Error("start document").Message; try { if (!StartPagePrinter(handle)) return Error("start page").Message; var memory = Marshal.AllocCoTaskMem(payload.Length); try { Marshal.Copy(payload, 0, memory, payload.Length); return WritePrinter(handle, memory, payload.Length, out var written) && written == payload.Length ? null : Error("write label").Message; } finally { Marshal.FreeCoTaskMem(memory); EndPagePrinter(handle); } } finally { EndDocPrinter(handle); } }
         finally { ClosePrinter(handle); }
     }
     static Exception Error(string action) => new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), $"Windows could not {action}");
