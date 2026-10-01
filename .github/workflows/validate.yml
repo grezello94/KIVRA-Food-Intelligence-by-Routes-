@@ -1,0 +1,43 @@
+name: Validate KIVRA
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+          cache: true
+          cache-dependency-path: |
+            src/**/*.csproj
+            tests/**/*.csproj
+
+      - name: Restore API and tests
+        run: |
+          dotnet restore src/Kivra.Api/Kivra.Api.csproj
+          dotnet restore tests/Kivra.Tests/Kivra.Tests.csproj
+
+      - name: Build production API
+        run: dotnet publish src/Kivra.Api/Kivra.Api.csproj --configuration Release --no-restore --output artifacts/api /p:UseAppHost=false
+
+      - name: Run tests
+        run: dotnet test tests/Kivra.Tests/Kivra.Tests.csproj --configuration Release --no-restore
+
+      - name: Validate browser scripts
+        run: |
+          node --check src/Kivra.Api/wwwroot/app.js
+          node --check src/Kivra.Api/wwwroot/food-category-rules.js
