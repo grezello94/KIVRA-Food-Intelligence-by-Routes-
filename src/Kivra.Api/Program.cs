@@ -68,6 +68,9 @@ builder.Services.AddDbContext<KivraDbContext>(o =>
         throw new InvalidOperationException("Database:Provider must be Postgres or Sqlite.");
 });
 builder.Services.ConfigureHttpJsonOptions(o=>o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+builder.Services.AddResponseCompression(options => options.EnableForHttps = true);
+builder.Services.AddScoped<LabelHistoryQuery>();
+builder.Services.AddScoped<BootstrapQuery>();
 builder.Services.AddRateLimiter(options => options.AddFixedWindowLimiter("login", limiter =>
 {
     limiter.PermitLimit = 20;
@@ -86,7 +89,18 @@ if (provider.Equals("Sqlite", StringComparison.OrdinalIgnoreCase))
     builder.Services.AddSingleton<SqliteBackupService>();
     builder.Services.AddHostedService(sp => sp.GetRequiredService<SqliteBackupService>());
 }
-var app = builder.Build(); app.UseExceptionHandler(); app.UseDefaultFiles(); app.UseStaticFiles(); app.UseRateLimiter(); app.UseAuthentication(); app.UseAuthorization();
+var app = builder.Build();
+app.UseExceptionHandler();
+app.UseResponseCompression();
+app.UseDefaultFiles();
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = context => context.Context.Response.Headers.CacheControl =
+        context.Context.Request.Path.StartsWithSegments("/assets")
+            ? "public,max-age=86400"
+            : "public,max-age=0,must-revalidate"
+});
+app.UseRateLimiter(); app.UseAuthentication(); app.UseAuthorization();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<KivraDbContext>();
@@ -107,7 +121,8 @@ using (var scope = app.Services.CreateScope())
 }
 app.MapGet("/healthz", () => Results.Ok(new { healthy = true, checkedAt = DateTimeOffset.UtcNow })).AllowAnonymous();
 app.MapPost("/api/auth/pin", async (PinLoginRequest request, IPinAuthentication auth, CancellationToken ct) => { var user=await auth.AuthenticateAsync(request.Pin,ct); return user is null ? Results.Unauthorized() : Results.Ok(new { token=auth.IssueToken(user),user=new {user.Id,user.DisplayName,user.Role} }); }).RequireRateLimiting("login").AllowAnonymous();
-app.MapGet("/api/bootstrap",async(ClaimsPrincipal user,KivraDbContext db,CancellationToken ct)=>{var items=await db.Items.Include(x=>x.Category).Include(x=>x.DefaultStorageLocation).Where(x=>x.Active).OrderBy(x=>x.Name).Select(x=>new{x.Id,x.Name,x.ShortName,x.ImageDataUrl,x.CategoryId,x.Classification,x.LabelType,x.DateTerminology,x.ShelfLifeValue,x.ShelfLifeUnit,x.DefaultStorageLocationId,x.DefaultLabelTemplate,x.Active,Category=x.Category!.Name,Storage=x.DefaultStorageLocation!=null?x.DefaultStorageLocation.Name:null}).ToListAsync(ct);var printers=await db.Printers.Where(x=>x.Enabled).OrderBy(x=>x.Name).ToListAsync(ct);var locations=await db.StorageLocations.Where(x=>x.Active).OrderBy(x=>x.Name).ToListAsync(ct);var labels=(await db.Labels.Include(x=>x.PrintJobs).ToListAsync(ct)).OrderByDescending(x=>x.CreatedAt).Take(500).ToList();var categories=await db.Categories.Where(x=>x.Active).OrderBy(x=>x.Name).ToListAsync(ct);var history=labels.Select(x=>new LabelHistoryDto(x.Id,x.LabelCode,x.ItemNameSnapshot,x.OperationalDateTime,x.ExpiryDateTime,x.CreatedAt,x.StorageLocationSnapshot,x.CurrentStatus,x.SuccessfulPrintCount,x.PrintJobs.OrderByDescending(j=>j.RequestedAt).Select(j=>(PrintJobStatus?)j.Status).FirstOrDefault()));var expiry=labels.Where(x=>x.CurrentStatus==LabelStatus.Active||x.CurrentStatus==LabelStatus.Expired).OrderBy(x=>x.ExpiryDateTime).Select(x=>new{x.Id,x.ItemNameSnapshot,x.LabelCode,x.OperationalDateTime,x.ExpiryDateTime,x.StorageLocationSnapshot,x.CurrentStatus});var admin=user.IsInRole(nameof(UserRole.Administrator));return Results.Ok(new{items,printers,locations,labels=history,expiry,categories,allPrinters=admin?await db.Printers.OrderBy(x=>x.Name).ToListAsync(ct):[],allLocations=admin?await db.StorageLocations.OrderBy(x=>x.Name).ToListAsync(ct):[],users=admin?await db.Users.OrderBy(x=>x.DisplayName).Select(x=>new{x.Id,x.DisplayName,x.Role,x.Active,x.CreatedAt}).ToListAsync(ct):[]});}).RequireAuthorization("Staff");
+app.MapGet("/api/bootstrap", async (ClaimsPrincipal user, BootstrapQuery query, CancellationToken ct) =>
+    Results.Ok(await query.ReadAsync(user.IsInRole(nameof(UserRole.Administrator)), ct))).RequireAuthorization("Staff");
 app.MapGet("/api/system/storage",async(KivraDbContext db,SqliteBackupState backups,CancellationToken ct)=>{if(!await db.Database.CanConnectAsync(ct))return Results.Problem("The production database is unavailable.",statusCode:503);var items=await db.Items.CountAsync(ct);var labels=await db.Labels.CountAsync(ct);var jobs=await db.PrintJobs.CountAsync(ct);return Results.Ok(new{healthy=true,provider=db.Database.ProviderName,items,labels,printJobs=jobs,backup=backups.Snapshot(),checkedAt=DateTimeOffset.UtcNow});}).RequireAuthorization("Admin");
 app.MapGet("/api/users", async (KivraDbContext db) => await db.Users.OrderBy(x=>x.DisplayName).Select(x=>new {x.Id,x.DisplayName,x.Role,x.Active,x.CreatedAt}).ToListAsync()).RequireAuthorization("Admin");
 app.MapPost("/api/users", async (CreateUserRequest request,KivraDbContext db) => { if(string.IsNullOrWhiteSpace(request.DisplayName)||request.Pin.Length<4)return Results.ValidationProblem(new Dictionary<string,string[]>{{"user",["Name and a PIN of at least four digits are required."]}}); var user=new User { DisplayName=request.DisplayName.Trim(),PinHash=PinAuthentication.Hash(request.Pin),Role=request.Role };db.Add(user);db.Add(new AuditLog { Action="UserCreated",EntityName="User",EntityId=user.Id,NewValues=$"{user.DisplayName}/{user.Role}" });await db.SaveChangesAsync();return Results.Created($"/api/users/{user.Id}",new {user.Id,user.DisplayName,user.Role});}).RequireAuthorization("Admin");
@@ -153,7 +168,8 @@ app.MapPut("/api/items/{id:guid}", async(Guid id,Item input,ClaimsPrincipal user
 app.MapPost("/api/labels/print", async (PrintLabelRequest request, ClaimsPrincipal user, LabelPrintService service, CancellationToken ct) => { var userId=Guid.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!); return Results.Ok(await service.PrintAsync(request with { RequestedByUserId=userId },ct)); }).RequireAuthorization("Staff");
 app.MapPost("/api/labels/{id:guid}/reprint", async (Guid id, ReprintRequest request, ClaimsPrincipal user, LabelPrintService service, CancellationToken ct) => Results.Ok(await service.ReprintAsync(id,Guid.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!),request.IdempotencyKey,ct))).RequireAuthorization("Supervisor");
 app.MapGet("/api/labels/{id:guid}/preview.tspl", async (Guid id,KivraDbContext db,ITsplGenerator generator,TimeZoneInfo zone,CancellationToken ct)=> { var label=await db.Labels.FindAsync([id],ct);if(label is null)return Results.NotFound();var printer=await db.Printers.FindAsync([label.PrinterId],ct);if(printer is null)return Results.NotFound();return Results.Text(generator.Generate(label,printer,zone),"text/plain");}).RequireAuthorization("Supervisor");
-app.MapGet("/api/labels", async (KivraDbContext db) => { var labels=await db.Labels.Include(x=>x.PrintJobs).ToListAsync();return labels.OrderByDescending(x=>x.CreatedAt).Select(x=>new LabelHistoryDto(x.Id,x.LabelCode,x.ItemNameSnapshot,x.OperationalDateTime,x.ExpiryDateTime,x.CreatedAt,x.StorageLocationSnapshot,x.CurrentStatus,x.SuccessfulPrintCount,x.PrintJobs.OrderByDescending(j=>j.RequestedAt).Select(j=>(PrintJobStatus?)j.Status).FirstOrDefault())); });
+app.MapGet("/api/labels", async (int? take, int? skip, LabelHistoryQuery query, CancellationToken ct) =>
+    await query.ReadAsync(take ?? LabelHistoryQuery.DefaultLimit, skip ?? 0, ct)).RequireAuthorization("Staff");
 app.MapPatch("/api/labels/{id:guid}/status", async (Guid id, ChangeStatusRequest request,ClaimsPrincipal user,KivraDbContext db) => { var label=await db.Labels.FindAsync(id); if(label is null)return Results.NotFound(); if(request.Status is not (LabelStatus.Consumed or LabelStatus.Discarded))return Results.BadRequest("Labels can only be marked consumed or discarded here."); if(label.CurrentStatus is LabelStatus.Cancelled or LabelStatus.Consumed or LabelStatus.Discarded)return Results.BadRequest("This label is already closed and cannot be changed."); var old=label.CurrentStatus; label.CurrentStatus=request.Status; label.UpdatedAt=DateTimeOffset.UtcNow; db.Add(new AuditLog { UserId=Guid.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!),Action=$"Label{request.Status}",EntityName="Label",EntityId=id,PreviousValues=old.ToString(),NewValues=request.Status.ToString() }); await db.SaveChangesAsync(); return Results.NoContent(); }).RequireAuthorization("Supervisor");
 app.MapGet("/api/expiry", async (string? window, KivraDbContext db) => { var now=DateTimeOffset.UtcNow; var midnight=new DateTimeOffset(now.Year,now.Month,now.Day,0,0,0,TimeSpan.Zero); var until=window?.ToLowerInvariant() switch { "today"=>midnight.AddDays(1), "tomorrow"=>midnight.AddDays(2), "3days"=>midnight.AddDays(3), "7days"=>midnight.AddDays(7), _=>DateTimeOffset.MaxValue }; var tracked=await db.Labels.Where(x=>x.CurrentStatus==LabelStatus.Active||x.CurrentStatus==LabelStatus.Expired).ToListAsync(); return tracked.Where(x=>x.ExpiryDateTime<=until).OrderBy(x=>x.ExpiryDateTime).Select(x=>new {x.Id,x.ItemNameSnapshot,x.LabelCode,x.OperationalDateTime,x.ExpiryDateTime,x.StorageLocationSnapshot,x.CurrentStatus}); });
 app.MapGet("/api/print-jobs", async (KivraDbContext db) => (await db.PrintJobs.ToListAsync()).OrderByDescending(x=>x.RequestedAt).Take(200)).RequireAuthorization("Supervisor");

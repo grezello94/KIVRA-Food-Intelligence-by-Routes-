@@ -88,7 +88,89 @@ public sealed class AndroidBridgeServiceTests
         Assert.Equal(PrintJobStatus.Printed, completed!.Status);
         Assert.Equal(1, label!.SuccessfulPrintCount);
         Assert.NotNull(label.LastSuccessfulPrintAt);
+        Assert.True(await bridge.CompleteAsync(device, reclaimed.JobId, true, null, CancellationToken.None));
+        Assert.Equal(1, label.SuccessfulPrintCount);
     }
+
+    [Fact]
+    public async Task Windows_bridge_claims_oldest_supported_job_without_loading_other_payloads()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<KivraDbContext>().UseSqlite(connection).Options;
+        await using var db = new KivraDbContext(options);
+        await db.Database.EnsureCreatedAsync();
+        var windowsPrinter = new Printer { Name = "USB", Model = "TSC", Driver = "TscTsplUsb" };
+        var androidPrinter = new Printer { Name = "Android", Model = "TSC", Driver = "AndroidBridge" };
+        var disabledPrinter = new Printer { Name = "Disabled", Model = "TSC", Driver = "TscTsplUsb", Enabled = false };
+        db.AddRange(windowsPrinter, androidPrinter, disabledPrinter);
+        var jobs = Enumerable.Range(0, 80).Select(i => NewJob(windowsPrinter, DateTimeOffset.UtcNow.AddMinutes(-i))).ToArray();
+        db.AddRange(jobs);
+        db.AddRange(NewJob(androidPrinter, DateTimeOffset.UtcNow.AddHours(-2)), NewJob(disabledPrinter, DateTimeOffset.UtcNow.AddHours(-2)));
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+
+        var bridge = new AndroidBridgeService(db);
+        var device = new BridgeDevice { Name = "Kitchen PC", TokenHash = "test", Platform = "windows" };
+        var claimed = await bridge.ClaimAsync(device, CancellationToken.None);
+
+        Assert.NotNull(claimed);
+        Assert.Equal(jobs[^1].Id, claimed.JobId);
+        Assert.Equal(jobs[^1].Payload, claimed.Payload);
+        Assert.Single(db.ChangeTracker.Entries<PrintJob>());
+        Assert.Single(db.ChangeTracker.Entries<Label>());
+        Assert.Equal(1, await db.PrintJobs.CountAsync(x => x.Status == PrintJobStatus.Sending));
+    }
+
+    [Fact]
+    public async Task Exhausted_leases_fail_without_reclaiming_another_bridges_job()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<KivraDbContext>().UseSqlite(connection).Options;
+        await using var db = new KivraDbContext(options);
+        await db.Database.EnsureCreatedAsync();
+        var printer = new Printer { Name = "USB", Model = "TSC", Driver = "TscTsplUsb" };
+        var device = new BridgeDevice { Name = "Kitchen PC", TokenHash = "test", Platform = "windows" };
+        db.Add(printer);
+        var exhausted = NewJob(printer, DateTimeOffset.UtcNow.AddHours(-1));
+        exhausted.Status = PrintJobStatus.Sending;
+        exhausted.BridgeDeviceId = device.Id;
+        exhausted.LeaseExpiresAt = DateTimeOffset.UtcNow.AddSeconds(-1);
+        exhausted.RetryCount = 3;
+        var otherBridge = NewJob(printer, DateTimeOffset.UtcNow.AddMinutes(-50));
+        otherBridge.Status = PrintJobStatus.Sending;
+        otherBridge.BridgeDeviceId = Guid.NewGuid();
+        otherBridge.LeaseExpiresAt = DateTimeOffset.UtcNow.AddSeconds(-1);
+        var queued = NewJob(printer, DateTimeOffset.UtcNow);
+        db.AddRange(exhausted, otherBridge, queued);
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+
+        var claimed = await new AndroidBridgeService(db).ClaimAsync(device, CancellationToken.None);
+
+        Assert.Equal(queued.Id, claimed!.JobId);
+        Assert.Equal(PrintJobStatus.Failed, (await db.PrintJobs.FindAsync(exhausted.Id))!.Status);
+        var untouched = await db.PrintJobs.FindAsync(otherBridge.Id);
+        Assert.Equal(PrintJobStatus.Sending, untouched!.Status);
+        Assert.Equal(otherBridge.BridgeDeviceId, untouched.BridgeDeviceId);
+    }
+
+    static PrintJob NewJob(Printer printer, DateTimeOffset requestedAt) => new()
+    {
+        PrinterId = printer.Id,
+        RequestedAt = requestedAt,
+        Payload = new string('X', 16_384),
+        Label = new Label
+        {
+            LabelCode = Guid.NewGuid().ToString("N"),
+            ItemNameSnapshot = "Test label",
+            CategorySnapshot = "Prepared food",
+            DateTerminologySnapshot = "PREPARED",
+            ShelfLifeRuleSnapshot = "1 day",
+            StorageLocationSnapshot = "Chiller"
+        }
+    };
 
     [Fact]
     public async Task Pairing_code_is_single_use()

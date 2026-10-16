@@ -21,7 +21,7 @@ static class Program
 sealed class BridgeContext : ApplicationContext
 {
     const string Server = "https://kivralabels.redlanternrestaurant.in";
-    const string Version = "1.5.0";
+    const string Version = "1.6.0";
     readonly string dataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KIVRA", "PrintBridge");
     readonly HttpClient http = new() { Timeout = TimeSpan.FromSeconds(30) };
     readonly CancellationTokenSource stopping = new();
@@ -87,40 +87,58 @@ sealed class BridgeContext : ApplicationContext
     async Task RunAsync(BridgeConfig current, CancellationToken token)
     {
         var lastHeartbeat = DateTimeOffset.MinValue;
+        var queues = new PrinterQueueMonitor(WindowsPrinter.GetQueues);
+        var printerAvailable = false;
+        // Validate a saved queue once before claiming work after startup. A USB
+        // queue may have been renamed while the bridge was stopped.
+        queues.RefreshIfDue();
         while (!token.IsCancellationRequested)
         {
             try
             {
-                var queues = WindowsPrinter.GetQueues();
-                if (!queues.Contains(current.QueueName, StringComparer.OrdinalIgnoreCase))
+                // Queue discovery can block in the Windows spooler. Refresh it in
+                // the background while idle, never before each queued label.
+                if (await queues.ApplyRefreshAsync())
                 {
-                    var replacement = DetectTsc(queues);
-                    if (replacement is null)
+                    var knownQueues = queues.KnownQueues!;
+                    printerAvailable = knownQueues.Contains(current.QueueName, StringComparer.OrdinalIgnoreCase);
+                    if (!printerAvailable && DetectTsc(knownQueues) is { } replacement)
                     {
-                        SetStatus($"Waiting for printer: {current.QueueName}");
-                        await Task.Delay(5000, token);
-                        continue;
+                        current = current with { QueueName = replacement };
+                        config = current;
+                        SaveConfig(current);
+                        printerAvailable = true;
+                        Log($"USB printer reconnected as: {replacement}");
                     }
-                    current = current with { QueueName = replacement };
-                    config = current;
-                    SaveConfig(current);
-                    Log($"USB printer reconnected as: {replacement}");
                 }
-                if (DateTimeOffset.UtcNow - lastHeartbeat >= TimeSpan.FromSeconds(20))
+                if (!printerAvailable)
                 {
-                    await Post<object>($"{current.Server}/api/bridge/heartbeat", new { appVersion = Version }, token);
-                    lastHeartbeat = DateTimeOffset.UtcNow;
+                    SetStatus($"Waiting for printer: {current.QueueName}");
+                    queues.RefreshIfDue(retrySoon: true);
+                    await Task.Delay(250, token);
+                    continue;
                 }
                 if (offline) { offline = false; Notify("Connection restored", "KIVRA Print Bridge is connected again.", ToolTipIcon.Info); }
                 SetStatus($"Ready — {current.QueueName}");
                 using var response = await http.PostAsync($"{current.Server}/api/bridge/jobs/claim", null, token);
-                if (response.StatusCode == System.Net.HttpStatusCode.NoContent) { await Task.Delay(500, token); continue; }
+                if (response.StatusCode == System.Net.HttpStatusCode.NoContent)
+                {
+                    queues.RefreshIfDue();
+                    await HeartbeatIfDue();
+                    await Task.Delay(250, token);
+                    continue;
+                }
                 response.EnsureSuccessStatusCode();
                 var job = await response.Content.ReadFromJsonAsync<BridgeJob>(JsonOptions(), token) ?? throw new InvalidOperationException("The server returned an empty print job.");
-                var error = WindowsPrinter.Send(current.QueueName, Encoding.ASCII.GetBytes(job.Payload));
+                var error = await Task.Run(() => WindowsPrinter.Send(current.QueueName, Encoding.ASCII.GetBytes(job.Payload)), token);
                 await Post<object>($"{current.Server}/api/bridge/jobs/{job.JobId}/complete", new { success = error is null, error }, token);
                 Log(error is null ? $"Printed {job.ItemName} ({job.LabelCode})" : $"Print failed: {error}");
-                if (error is not null) Notify("Print failed", error, ToolTipIcon.Error);
+                if (error is not null)
+                {
+                    queues.RefreshIfDue(force: true);
+                    Notify("Print failed", error, ToolTipIcon.Error);
+                }
+                await HeartbeatIfDue();
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { break; }
             catch (Exception ex)
@@ -130,6 +148,13 @@ sealed class BridgeContext : ApplicationContext
                 if (!offline) { offline = true; Notify("Connection interrupted", "KIVRA cannot reach the server. It will keep retrying in the background.", ToolTipIcon.Warning); }
                 await Task.Delay(5000, token);
             }
+        }
+
+        async Task HeartbeatIfDue()
+        {
+            if (DateTimeOffset.UtcNow - lastHeartbeat < TimeSpan.FromSeconds(20)) return;
+            await Post<object>($"{current.Server}/api/bridge/heartbeat", new { appVersion = Version }, token);
+            lastHeartbeat = DateTimeOffset.UtcNow;
         }
     }
 

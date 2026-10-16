@@ -1,4 +1,28 @@
-const CACHE='kivra-shell-v77';const SHELL=['/','/index.html','/app.css?v=77','/printer.css?v=77','/visual-refresh.css?v=77','/command-center.css?v=77','/futuristic.css?v=77','/futuristic-panels.css?v=77','/assets/kitchen-food-sprite-v2.webp','/assets/kivra-routes-logo.webp','/food-category-rules.js?v=77','/food-photos.js?v=77','/ui-icons.js?v=77','/app.js?v=77','/manifest.webmanifest','/assets/food/ajinamoto.webp','/assets/food/bbq.webp','/assets/food/bread-crumbs.webp','/assets/food/chilli-flakes.webp','/assets/food/curry-leaves.webp','/assets/food/fresh-cream.webp','/assets/food/fry-chilly.webp','/assets/food/kaju-magaj-till.webp','/assets/food/kasuri-methi.webp','/assets/food/rawa.webp','/assets/food/sugar.webp','/assets/food/till.webp','/assets/food/white-tandoori-masala.webp','/assets/food/fried-onion.webp','/assets/food/geen-chutney.webp','/assets/food/raw-fish.webp','/assets/food/65-masala.webp','/assets/food/biryani-masala.webp','/assets/food/boiled-chicken.webp','/assets/food/boiled-chicken-boneless.webp','/assets/food/boiled-dal.webp','/assets/food/boiled-egg.webp','/assets/food/boiled-mutton.webp','/assets/food/boiled-mutton-boneless.webp','/assets/food/boiled-noodles.webp','/assets/food/boiled-prawns.webp','/assets/food/boiled-rice.webp','/assets/food/butter.webp','/assets/food/butter-chicken.webp','/assets/food/chaat-masala.webp','/assets/food/cheese.webp','/assets/food/chicken-crispy.webp','/assets/food/chicken-lollipop.webp','/assets/food/chicken-pakoda.webp','/assets/food/chicken-pakora.webp','/assets/food/chilli-powder.webp','/assets/food/chopped-chilli.webp','/assets/food/chopped-garlic.webp','/assets/food/chopped-ginger.webp','/assets/food/chopped-masala.webp','/assets/food/chutney.webp','/assets/food/coriander.webp','/assets/food/coriander-powder.webp','/assets/food/cut-capsicum.webp','/assets/food/cut-carrot.webp','/assets/food/cut-onion.webp','/assets/food/fried-chicken.webp','/assets/food/fried-kanda.webp','/assets/food/fried-noodles.webp','/assets/food/garam-masala.webp','/assets/food/ginger-garlic-paste.webp','/assets/food/gobi-pakoda.webp','/assets/food/green-chutney.webp','/assets/food/haldi-powder.webp','/assets/food/jeera-powder.webp','/assets/food/kanda-lasun-masala.webp','/assets/food/kitchen-king-masala.webp','/assets/food/maida.webp','/assets/food/masala.webp','/assets/food/masala-powder.webp','/assets/food/mayonnaise.webp','/assets/food/mint.webp','/assets/food/mix-veg.webp','/assets/food/mushroom-pakoda.webp','/assets/food/noodles.webp','/assets/food/onion-and-capsicum.webp','/assets/food/paneer.webp','/assets/food/prawns-pakoda.webp','/assets/food/raita.webp','/assets/food/raw-chicken.webp','/assets/food/raw-prawns.webp','/assets/food/rechado-masala.webp','/assets/food/schezwan-sauce.webp','/assets/food/spring-onion.webp','/assets/food/tandoori-masala.webp','/assets/food/tandoori-masala-powder.webp','/assets/food/veg-pakoda.webp','/assets/food/white-pepper-masala.webp','/assets/food/frozen-vegetables.webp','/assets/food/whole-spices.webp'];
-self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting())));
-self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
-self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;const url=new URL(e.request.url);if(url.pathname.startsWith('/api/'))return;const fresh=e.request.mode==='navigate'||url.pathname.endsWith('.js')||url.pathname.endsWith('.css');if(fresh){e.respondWith(fetch(e.request).then(r=>{if(r.ok){const copy=r.clone();caches.open(CACHE).then(c=>c.put(e.request,copy))}return r}).catch(()=>caches.match(e.request)));return}e.respondWith(caches.match(e.request).then(cached=>cached||fetch(e.request).then(r=>{if(r.ok){const copy=r.clone();caches.open(CACHE).then(c=>c.put(e.request,copy))}return r})));});
+const CACHE='kivra-shell-v78';
+// Precache the application only. Food photos are cached when they are viewed,
+// so installation does not compete with startup/print requests for bandwidth.
+const SHELL=['/index.html','/app.css?v=78','/printer.css?v=78','/visual-refresh.css?v=78','/command-center.css?v=78','/futuristic.css?v=78','/futuristic-panels.css?v=78','/assets/kivra-routes-logo.webp','/food-category-rules.js?v=78','/food-photos.js?v=78','/ui-icons.js?v=78','/app.js?v=78','/manifest.webmanifest'];
+self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(SHELL)).then(()=>self.skipWaiting())));
+self.addEventListener('activate',event=>event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key.startsWith('kivra-shell-')&&key!==CACHE).map(key=>caches.delete(key)))).then(()=>self.clients.claim())));
+self.addEventListener('fetch',event=>{
+ if(event.request.method!=='GET')return;
+ const url=new URL(event.request.url);
+ if(url.origin!==self.location.origin||url.pathname.startsWith('/api/'))return;
+ const cacheResponse=response=>{
+  if(response.ok){const copy=response.clone();event.waitUntil(caches.open(CACHE).then(cache=>cache.put(event.request,copy)))}
+  return response;
+ };
+ if(event.request.mode==='navigate'){
+  event.respondWith(fetch(event.request).then(cacheResponse).catch(async()=>await caches.match(event.request)||await caches.match('/index.html')||Response.error()));
+  return;
+ }
+ // Versioned scripts and styles can be served immediately. A release changes
+ // the URL version and cache name, so updated code is still fetched once.
+ const versioned=url.searchParams.has('v')&&/\.(js|css)$/.test(url.pathname);
+ const image=/\.(webp|png|jpe?g|svg|ico)$/.test(url.pathname);
+ if(versioned||image){
+  event.respondWith(caches.match(event.request).then(cached=>cached||fetch(event.request).then(cacheResponse)));
+  return;
+ }
+ event.respondWith(fetch(event.request).then(cacheResponse).catch(async()=>await caches.match(event.request)||Response.error()));
+});

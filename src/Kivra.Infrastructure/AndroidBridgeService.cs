@@ -94,13 +94,25 @@ public sealed class AndroidBridgeService(KivraDbContext db)
     public async Task<BridgeJob?> ClaimAsync(BridgeDevice device, CancellationToken ct)
     {
         var now = DateTimeOffset.UtcNow;
-        var leasedJobs = await db.PrintJobs
-            .Where(x => x.Status == PrintJobStatus.Sending)
-            .ToListAsync(ct);
-        foreach (var expired in leasedJobs.Where(x =>
-                     x.LeaseExpiresAt < now &&
-                     (x.RetryCount >= 3 ||
-                      (x.BridgeDeviceId != device.Id && x.LeaseExpiresAt < now.AddMinutes(-5)))))
+        var abandonedBefore = now.AddMinutes(-5);
+        var leasedJobs = db.PrintJobs.Where(x => x.Status == PrintJobStatus.Sending);
+        List<PrintJob> expiredJobs;
+        if (db.Database.IsSqlite())
+        {
+            // SQLite cannot compare DateTimeOffset values in LINQ. Inspect only
+            // lease metadata, keeping every pending TSPL payload out of the scan.
+            var leases = await leasedJobs.Select(x => new { x.Id, x.LeaseExpiresAt, x.RetryCount, x.BridgeDeviceId }).ToListAsync(ct);
+            var expiredIds = leases.Where(x => x.LeaseExpiresAt < now &&
+                (x.RetryCount >= 3 || (x.BridgeDeviceId != device.Id && x.LeaseExpiresAt < abandonedBefore)))
+                .Select(x => x.Id).ToArray();
+            expiredJobs = expiredIds.Length == 0 ? [] : await leasedJobs.Where(x => expiredIds.Contains(x.Id)).ToListAsync(ct);
+        }
+        else
+        {
+            expiredJobs = await leasedJobs.Where(x => x.LeaseExpiresAt < now &&
+                (x.RetryCount >= 3 || (x.BridgeDeviceId != device.Id && x.LeaseExpiresAt < abandonedBefore))).ToListAsync(ct);
+        }
+        foreach (var expired in expiredJobs)
         {
             expired.Status = PrintJobStatus.Failed;
             expired.CompletedAt = now;
@@ -108,7 +120,7 @@ public sealed class AndroidBridgeService(KivraDbContext db)
             expired.FailureReason = "The Android Print Bridge did not acknowledge the job after three attempts.";
             expired.UpdatedAt = now;
         }
-        await db.SaveChangesAsync(ct);
+        if (expiredJobs.Count > 0) await db.SaveChangesAsync(ct);
 
         // Npgsql's retrying execution strategy requires user-created transactions
         // to execute as one retriable unit. Starting the transaction outside the
@@ -120,20 +132,29 @@ public sealed class AndroidBridgeService(KivraDbContext db)
             var supportedDrivers = string.Equals(device.Platform, "windows", StringComparison.OrdinalIgnoreCase)
                 ? new[] { "TscTsplUsb", "EpsonEscPosUsb" }
                 : new[] { "AndroidBridge" };
-            var candidates = await (
+            var candidates = (
                 from job in db.PrintJobs
                 join printer in db.Printers on job.PrinterId equals printer.Id
                 where supportedDrivers.Contains(printer.Driver) && printer.Enabled &&
-                      (job.Status == PrintJobStatus.Queued || job.Status == PrintJobStatus.Sending)
-                select new { Job = job, Printer = printer, Label = job.Label! })
-                .ToListAsync(ct);
-            var candidate = candidates
-                .Where(x => x.Job.Status == PrintJobStatus.Queued ||
-                            (x.Job.BridgeDeviceId == device.Id &&
-                             x.Job.LeaseExpiresAt < now &&
-                             x.Job.RetryCount < 3))
-                .OrderBy(x => x.Job.RequestedAt)
-                .FirstOrDefault();
+                      (job.Status == PrintJobStatus.Queued ||
+                       (job.Status == PrintJobStatus.Sending && job.BridgeDeviceId == device.Id && job.RetryCount < 3))
+                select new { Job = job, Printer = printer, Label = job.Label! });
+            if (db.Database.IsSqlite())
+            {
+                var pending = await candidates.Select(x => new { x.Job.Id, x.Job.Status, x.Job.LeaseExpiresAt, x.Job.RequestedAt }).ToListAsync(ct);
+                var candidateId = pending.Where(x => x.Status == PrintJobStatus.Queued || x.LeaseExpiresAt < now)
+                    .OrderBy(x => x.RequestedAt).ThenBy(x => x.Id).Select(x => (Guid?)x.Id).FirstOrDefault();
+                candidates = candidates.Where(x => x.Job.Id == candidateId);
+            }
+            else
+            {
+                // Filter, order and limit in PostgreSQL. Previously every claim
+                // downloaded and tracked the entire queue, including all payloads.
+                candidates = candidates.Where(x => x.Job.Status == PrintJobStatus.Queued || x.Job.LeaseExpiresAt < now);
+            }
+            var candidate = db.Database.IsSqlite()
+                ? await candidates.FirstOrDefaultAsync(ct)
+                : await candidates.OrderBy(x => x.Job.RequestedAt).ThenBy(x => x.Job.Id).FirstOrDefaultAsync(ct);
 
             if (candidate is null)
             {

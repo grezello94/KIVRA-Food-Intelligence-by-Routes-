@@ -22,5 +22,9 @@ public static class SchemaCompatibility {
   await db.Database.ExecuteSqlRawAsync("CREATE UNIQUE INDEX IF NOT EXISTS \"IX_BridgeDevices_TokenHash\" ON \"BridgeDevices\" (\"TokenHash\")",ct);
   await db.Database.ExecuteSqlRawAsync("CREATE TABLE IF NOT EXISTS \"BridgePairingCodes\" (\"Id\" TEXT NOT NULL CONSTRAINT \"PK_BridgePairingCodes\" PRIMARY KEY, \"CodeHash\" TEXT NOT NULL, \"ExpiresAt\" TEXT NOT NULL, \"UsedAt\" TEXT NULL, \"CreatedByUserId\" TEXT NOT NULL, \"CreatedAt\" TEXT NOT NULL, \"UpdatedAt\" TEXT NOT NULL)",ct);
   await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_BridgePairingCodes_CodeHash\" ON \"BridgePairingCodes\" (\"CodeHash\")",ct);
+  await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_Labels_OperationalDateTime\" ON \"Labels\" (\"OperationalDateTime\")",ct);
+  // SQLite date comparisons use julianday to account for stored UTC offsets.
+  await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_Labels_OperationalJulianDay\" ON \"Labels\" (julianday(\"OperationalDateTime\"))",ct);
+  await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_PrintJobs_Status_RequestedAt\" ON \"PrintJobs\" (\"Status\", \"RequestedAt\")",ct);
  }
 }

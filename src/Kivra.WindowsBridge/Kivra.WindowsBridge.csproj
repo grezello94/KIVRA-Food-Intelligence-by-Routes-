@@ -6,5 +6,6 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>KIVRA Windows Print Bridge</AssemblyName>
+    <Version>1.6.0</Version>
   </PropertyGroup>
 </Project>

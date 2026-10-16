@@ -31,6 +31,14 @@ Copy `.env.example` to `.env`, replace every placeholder with deployment-specifi
 - A successful TCP connection or visible USB queue only proves transport availability. Always run **Test Print** with the exact installed roll and confirm alignment before operational printing.
 - When KIVRA is hosted on Coolify but the printer remains connected to a Windows PC by USB, run `KIVRA Windows Print Bridge.exe` on that PC once and pair it from **More > Print Bridge**. The bridge installs itself under the current user's local application data, starts silently in the Windows notification area at every sign-in, remembers the selected queue, and waits for the Windows spooler/USB printer during boot. Double-click its tray icon to see connection status or open its log. Hosted USB jobs are then claimed securely and written to the local RAW queue; Visual Studio is not required.
 
+### Windows bridge 1.6.0 performance update
+
+Deploy the updated API and web assets, then replace the bridge on each printer PC: choose **Exit** from the existing bridge's notification-area menu, extract `wwwroot/downloads/KIVRA-Windows-Print-Bridge.zip`, and launch the new `KIVRA Windows Print Bridge.exe`. Existing pairing and USB queue settings are retained. Updating the website alone does not replace an already installed bridge.
+
+Version 1.6.0 validates the queue once at startup, discovers printers in the background while idle, and polls every 250 ms. Normal label delivery no longer enumerates all Windows printer queues. The server selects one pending job instead of loading the entire queue. Startup/history queries read at most 500 label summaries without TSPL payloads, and the browser refreshes only label activity after printing.
+
+Validate changes with `dotnet test tests/Kivra.Tests/Kivra.Tests.csproj` and `node --test tests/Kivra.Web.Tests/performance.test.cjs`. Timing checks use local test data and a fake printer; confirm physical output on the kitchen printer after installing the update.
+
 ## Coolify deployment
 
 The production application runs as one ASP.NET container on Coolify and serves both the API and static PWA. PostgreSQL should run as a persistent Coolify database resource on the Contabo server.
