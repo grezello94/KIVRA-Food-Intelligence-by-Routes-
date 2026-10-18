@@ -3,7 +3,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Kivra.Infrastructure;
 
-public sealed class BootstrapQuery(KivraDbContext db, LabelHistoryQuery history)
+public sealed class BootstrapQuery(KivraDbContext db, LabelHistoryQuery history, TimeZoneInfo? restaurantTimeZone = null)
 {
     public async Task<object> ReadAsync(bool administrator, CancellationToken ct = default)
     {
@@ -29,6 +29,7 @@ public sealed class BootstrapQuery(KivraDbContext db, LabelHistoryQuery history)
 
         return new
         {
+            restaurantTimeZoneId = (restaurantTimeZone ?? TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")).Id,
             items,
             printers = printers.Where(x => x.Enabled).ToList(),
             locations = locations.Where(x => x.Active).ToList(),

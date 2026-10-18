@@ -38,9 +38,10 @@ public sealed class LabelPrintServiceTests
         var created = await fixture.Service.PrintAsync(fixture.Request(), CancellationToken.None);
         fixture.Saves.JobStates.Clear();
         var key = Guid.NewGuid().ToString("N");
+        var userId = Guid.NewGuid();
 
-        var result = await fixture.Service.ReprintAsync(created.LabelId, Guid.NewGuid(), key, CancellationToken.None);
-        var repeated = await fixture.Service.ReprintAsync(created.LabelId, Guid.NewGuid(), key, CancellationToken.None);
+        var result = await fixture.Service.ReprintAsync(created.LabelId, userId, key, CancellationToken.None);
+        var repeated = await fixture.Service.ReprintAsync(created.LabelId, userId, key, CancellationToken.None);
 
         Assert.Equal(PrintJobStatus.Queued, result.Status);
         Assert.True(repeated.Idempotent);
@@ -58,9 +59,10 @@ public sealed class LabelPrintServiceTests
         var created = await fixture.Service.PrintAsync(fixture.Request(), CancellationToken.None);
         fixture.Saves.JobStates.Clear();
         var key = Guid.NewGuid().ToString("N");
+        var userId = Guid.NewGuid();
 
-        var result = await fixture.Service.ReprintAsync(created.LabelId, Guid.NewGuid(), key, CancellationToken.None);
-        var repeated = await fixture.Service.ReprintAsync(created.LabelId, Guid.NewGuid(), key, CancellationToken.None);
+        var result = await fixture.Service.ReprintAsync(created.LabelId, userId, key, CancellationToken.None);
+        var repeated = await fixture.Service.ReprintAsync(created.LabelId, userId, key, CancellationToken.None);
 
         Assert.Equal(PrintJobStatus.Printed, result.Status);
         Assert.True(repeated.Idempotent);
@@ -68,6 +70,24 @@ public sealed class LabelPrintServiceTests
         Assert.Equal(2, fixture.Printer.Commands.Count);
         Assert.Equal(2, (await fixture.Db.Labels.SingleAsync()).SuccessfulPrintCount);
         Assert.Single(await fixture.Db.AuditLogs.Where(x => x.Action == "LabelReprinted").ToListAsync());
+    }
+
+    [Fact]
+    public async Task Rejects_reusing_print_keys_for_another_user_payload_or_reprint_operation()
+    {
+        await using var fixture = await PrintFixture.CreateAsync();
+        var request = fixture.Request();
+        var created = await fixture.Service.PrintAsync(request, CancellationToken.None);
+
+        await Assert.ThrowsAsync<IdempotencyConflictException>(() => fixture.Service.PrintAsync(request with { RequestedByUserId = Guid.NewGuid() }, CancellationToken.None));
+        await Assert.ThrowsAsync<IdempotencyConflictException>(() => fixture.Service.PrintAsync(request with { Quantity = 5 }, CancellationToken.None));
+        await Assert.ThrowsAsync<IdempotencyConflictException>(() => fixture.Service.ReprintAsync(created.LabelId, request.RequestedByUserId, request.IdempotencyKey, CancellationToken.None));
+
+        var reprintKey = Guid.NewGuid().ToString("N");
+        await fixture.Service.ReprintAsync(created.LabelId, request.RequestedByUserId, reprintKey, CancellationToken.None);
+        await Assert.ThrowsAsync<IdempotencyConflictException>(() => fixture.Service.ReprintAsync(created.LabelId, Guid.NewGuid(), reprintKey, CancellationToken.None));
+        Assert.Equal(2, fixture.Printer.Commands.Count);
+        Assert.Equal(2, await fixture.Db.PrintJobs.CountAsync());
     }
 
     [Fact]

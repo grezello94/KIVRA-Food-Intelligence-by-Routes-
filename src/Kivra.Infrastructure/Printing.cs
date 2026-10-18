@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text;
 using Kivra.Application;
 using Kivra.Domain;
+using Label = Kivra.Domain.Label;
 namespace Kivra.Infrastructure;
 public sealed class FakeLabelPrinter : ILabelPrinter {
  public ConcurrentQueue<string> Commands { get; } = new();

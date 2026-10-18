@@ -55,6 +55,9 @@ public sealed class BootstrapQueryTests(ITestOutputHelper output)
         Assert.Equal("L-749", labels[0].LabelCode);
         Assert.Equal("L-250", labels[^1].LabelCode);
         Assert.All(labels, x => Assert.Equal(PrintJobStatus.Printed, x.LastPrintStatus));
+        Assert.Equal("Prepared", labels[0].CategorySnapshot);
+        Assert.Equal("PREPARED", labels[0].DateTerminologySnapshot);
+        Assert.Equal("1 Days", labels[0].ShelfLifeRuleSnapshot);
         Assert.Empty(fixture.Db.ChangeTracker.Entries());
         var command = Assert.Single(fixture.Commands.Sql);
         Assert.Contains("LIMIT", command);
@@ -110,6 +113,12 @@ public sealed class BootstrapQueryTests(ITestOutputHelper output)
         Assert.Equal(label.ItemNameSnapshot, json.GetProperty("expiry")[0].GetProperty("itemNameSnapshot").GetString());
         Assert.Equal(label.StorageLocationSnapshot, json.GetProperty("expiry")[0].GetProperty("storageLocationSnapshot").GetString());
         Assert.Equal(JsonValueKind.Null, json.GetProperty("labels")[0].GetProperty("lastPrintStatus").ValueKind);
+        var history = json.GetProperty("labels")[0];
+        Assert.Equal(label.ItemId, history.GetProperty("itemId").GetGuid());
+        Assert.Equal(label.PrinterId, history.GetProperty("printerId").GetGuid());
+        Assert.Equal(label.CategorySnapshot, history.GetProperty("categorySnapshot").GetString());
+        Assert.Equal(label.DateTerminologySnapshot, history.GetProperty("dateTerminologySnapshot").GetString());
+        Assert.Equal(label.ShelfLifeRuleSnapshot, history.GetProperty("shelfLifeRuleSnapshot").GetString());
     }
 
     private static Label NewLabel(int number, DateTimeOffset createdAt) => new()

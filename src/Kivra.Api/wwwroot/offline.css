@@ -1,0 +1,18 @@
+/* Show kitchen screens immediately; background sync never restarts a page fade. */
+.screen{animation:none!important}
+.offline-status{position:fixed;right:24px;bottom:18px;z-index:60;display:flex;align-items:center;gap:10px;max-width:calc(100vw - 32px);padding:10px 14px;border:1px solid #d6e3d9;border-radius:14px;background:#f5fbf5;color:#234735;box-shadow:0 4px 22px #172b1912;font:12px/1.4 system-ui,sans-serif}
+.offline-status[hidden]{display:none}
+.offline-status b,.offline-status small{display:block}
+.offline-status small{color:#647167;font-size:11px}
+.offline-status button{padding:6px 9px;border:1px solid currentColor;border-radius:8px;background:transparent;color:inherit;font:inherit;cursor:pointer;white-space:nowrap}
+.connection-indicator{width:8px;height:8px;flex:0 0 8px;border-radius:50%;background:#438b54}
+.offline-status.offline,.offline-status.pending{background:#fff8e7;border-color:#edcf88;color:#70521b}
+.offline-status.offline .connection-indicator,.offline-status.pending .connection-indicator{background:#bb851e}
+.offline-status.blocked,.offline-status.storage-error{background:#fff1ed;border-color:#efb8a6;color:#8f3d29}
+.offline-status.blocked .connection-indicator,.offline-status.storage-error .connection-indicator{background:#bb4e30}
+.offline-status.syncing .connection-indicator{background:#5480b8;animation:sync-pulse 1.4s ease-in-out infinite}
+.sync-page{padding-bottom:90px}.sync-page .settings-card{margin-bottom:18px}.sync-page p{line-height:1.6}.sync-page .panel-actions{flex-wrap:wrap;gap:10px}.sync-state{font-weight:600}
+.pending-operation{display:flex;justify-content:space-between;align-items:start;gap:16px;padding:16px 0;border-top:1px solid #e6e9e3}.pending-operation small{display:block;margin-top:4px;color:#758072}.pending-operation p{font-size:13px;color:#8f3d29;overflow-wrap:anywhere}.pending-operation .btn{flex-shrink:0;font-size:12px}
+@keyframes sync-pulse{50%{opacity:.35}}
+@media(max-width:759px){.offline-status{left:12px;right:12px;bottom:calc(76px + env(safe-area-inset-bottom));max-width:none;padding:8px 11px;font-size:11px}.offline-status button{margin-left:auto}.pending-operation{flex-direction:column}.screen{padding-bottom:145px!important}}
+@media(prefers-reduced-motion:reduce){.offline-status.syncing .connection-indicator{animation:none}}

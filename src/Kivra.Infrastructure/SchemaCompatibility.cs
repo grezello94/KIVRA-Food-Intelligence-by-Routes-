@@ -26,5 +26,6 @@ public static class SchemaCompatibility {
   // SQLite date comparisons use julianday to account for stored UTC offsets.
   await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_Labels_OperationalJulianDay\" ON \"Labels\" (julianday(\"OperationalDateTime\"))",ct);
   await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_PrintJobs_Status_RequestedAt\" ON \"PrintJobs\" (\"Status\", \"RequestedAt\")",ct);
+  await db.Database.ExecuteSqlRawAsync("CREATE TABLE IF NOT EXISTS \"OfflineMutationReceipts\" (\"UserId\" TEXT NOT NULL, \"IdempotencyKey\" TEXT NOT NULL, \"RequestHash\" TEXT NOT NULL, \"StatusCode\" INTEGER NOT NULL, \"ContentType\" TEXT NULL, \"Location\" TEXT NULL, \"ResponseBody\" BLOB NOT NULL, \"CreatedAt\" TEXT NOT NULL, CONSTRAINT \"PK_OfflineMutationReceipts\" PRIMARY KEY (\"UserId\", \"IdempotencyKey\"))",ct);
  }
 }

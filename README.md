@@ -39,6 +39,34 @@ Version 1.6.0 validates the queue once at startup, discovers printers in the bac
 
 Validate changes with `dotnet test tests/Kivra.Tests/Kivra.Tests.csproj` and `node --test tests/Kivra.Web.Tests/performance.test.cjs`. Timing checks use local test data and a fake printer; confirm physical output on the kitchen printer after installing the update.
 
+## Offline operation and Windows USB printing (1.7.0)
+
+Deploy the updated API and web assets together. Startup applies the new `202610180007_AddOfflineMutationReceipts` database migration. Close all existing KIVRA windows and reopen after deployment so the new offline shell can activate without replacing an open print form.
+
+On the Windows PC connected to the TSC USB printer:
+
+1. Exit the old bridge from its notification-area menu. Extract the updated `wwwroot/downloads/KIVRA-Windows-Print-Bridge.zip` and launch `KIVRA Windows Print Bridge.exe`. The standalone 1.7.0 build retains existing pairing, queue selection and automatic startup.
+2. Sign in to KIVRA while online. Use **Settings > Printer Setup** to configure the printer with the **TSC TSPL USB** driver and its Windows RAW queue.
+3. Open **Settings > Offline & sync**, select that printer, and choose **Connect this PC**. Allow the browser's local network access request. The bridge accepts requests only from its paired website, on `127.0.0.1:17847`, using an installation-specific token. Current Chrome/Edge may request [local network access permission](https://developer.chrome.com/blog/local-network-access).
+4. Keep the bridge running. New labels and existing-label reprints now go directly to the configured USB queue, including while the hosted server is unreachable. Reprints retain the original preparation time, expiry and shelf-life snapshot.
+
+The application shell, local food photos and signed-in account's kitchen data are cached on the PC. IndexedDB stores pending changes before sending or printing. Item/category/printer/storage edits and consumed/discarded statuses remain usable offline and replay in order. Locally printed labels sync their recorded snapshots into server history **without printing another copy**. API replay receipts and durable receipts on the printer PC protect against retries, lost responses and restarts. A request whose physical print result is uncertain stops additional copies and remains available for review in **Offline & sync**.
+
+Offline use requires a previously loaded application and an unexpired signed-in shift session (12 hours). Sign-in, new accounts/PIN changes, bridge pairing and printer discovery require the server. Signing out clears remembered access but retains unsynced work for the same account to recover after signing back in. Offline reports contain the saved recent history (up to 500 server labels plus pending local work); online exports still include the full server history. Keep browser site storage enabled.
+
+Cached screens open immediately. Date formatting reuses formatters, screen changes avoid repeated fade-in delays, and reconnecting preserves open print/item/printer forms. The offline status panel shows pending work and blocked requests instead of claiming a disconnected print succeeded.
+
+Validate with:
+
+```sh
+dotnet test tests/Kivra.Tests/Kivra.Tests.csproj
+node --test tests/Kivra.Web.Tests/*.test.cjs
+```
+
+The browser regression test runs when Playwright is available; otherwise the dependency-free Node suite skips it. Set `KIVRA_PLAYWRIGHT_MODULE` to an installed Playwright module path and optionally `KIVRA_CHROME_PATH` to a browser executable, then run `node --test tests/Kivra.Web.Tests/offline-browser.test.cjs`. It uses isolated local servers and a mock USB bridge to verify offline cold startup, local prints/reprints, original dates, dependent edits, and reconnect without duplicate printing.
+
+Before kitchen rollout, verify physical output on Windows: disconnect internet while leaving USB connected, reload KIVRA, print and reprint a label, mark it consumed, reconnect, and confirm history synchronizes without another physical copy. Automated tests verify spooler calls and receipts; they cannot inspect paper output.
+
 ## Coolify deployment
 
 The production application runs as one ASP.NET container on Coolify and serves both the API and static PWA. PostgreSQL should run as a persistent Coolify database resource on the Contabo server.

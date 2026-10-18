@@ -24,7 +24,9 @@ public sealed class LabelHistoryQuery(KivraDbContext db)
                    l."SuccessfulPrintCount",
                    (SELECT j."Status" FROM "PrintJobs" AS j
                     WHERE j."LabelId" = l."Id"
-                    ORDER BY j."RequestedAt" DESC, j."Id" DESC LIMIT 1) AS "LastPrintStatus"
+                    ORDER BY j."RequestedAt" DESC, j."Id" DESC LIMIT 1) AS "LastPrintStatus",
+                   l."ItemId", l."PrinterId", l."StorageLocationId", l."CategorySnapshot",
+                   l."ClassificationSnapshot", l."DateTerminologySnapshot", l."ShelfLifeRuleSnapshot"
             FROM "Labels" AS l
             ORDER BY l."CreatedAt" DESC, l."Id" DESC
             LIMIT {take} OFFSET {skip}

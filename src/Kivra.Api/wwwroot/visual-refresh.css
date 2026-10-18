@@ -772,7 +772,7 @@ body,.app-shell{background:var(--app-canvas);color:var(--app-ink)}
   .home-commandbar{display:flex!important;width:100%!important}
   .home-commandbar .search{min-width:0!important}
   .home-theme{display:grid;place-items:center;width:50px;height:50px;flex:none;border:1px solid #e6eaf0;border-radius:13px;background:#fff;color:#182634;font-size:20px;box-shadow:0 3px 12px #0f172a0a}
-  .welcome-banner{width:100%!important;max-width:none!important;background-image:linear-gradient(90deg,rgba(6,12,18,.96) 0%,rgba(6,12,18,.80) 35%,rgba(6,12,18,.32) 100%),url('https://images.unsplash.com/photo-1547592180-85f173990554?auto=format&fit=crop&w=1800&q=88')!important;background-position:center!important;background-size:cover!important}
+  .welcome-banner{width:100%!important;max-width:none!important;background-image:linear-gradient(90deg,rgba(6,12,18,.96) 0%,rgba(6,12,18,.80) 35%,rgba(6,12,18,.32) 100%),url('/assets/kitchen-food-sprite-v2.webp')!important;background-position:center,66.667% 0!important;background-size:auto,400% 200%!important}
   .home-screen .category-grid{width:100%!important;max-width:none!important;grid-template-columns:repeat(5,minmax(0,1fr))!important;gap:12px!important}
   .home-screen .category-card.photo-card,.add-category-card{height:122px!important;min-height:122px!important;aspect-ratio:auto!important;border-radius:15px!important}
   .home-screen .category-card.photo-card{background-size:cover!important;background-position:center!important}

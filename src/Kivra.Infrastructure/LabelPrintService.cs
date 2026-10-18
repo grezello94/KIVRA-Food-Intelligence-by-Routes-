@@ -6,7 +6,14 @@ public sealed class LabelPrintService(KivraDbContext db, IExpiryCalculator expir
  public async Task<PrintResult> PrintAsync(PrintLabelRequest request, CancellationToken ct) {
   if (string.IsNullOrWhiteSpace(request.IdempotencyKey)) throw new ArgumentException("An Idempotency-Key is required.");
   var existing = await db.PrintJobs.Include(x => x.Label).SingleOrDefaultAsync(x => x.IdempotencyKey == request.IdempotencyKey, ct);
-  if (existing is not null) return new(existing.LabelId, existing.Label!.LabelCode, existing.Id, existing.Status, existing.FailureReason, true);
+  if (existing is not null) {
+   var existingLabel = existing.Label!;
+   if (existing.IsReprint || existingLabel.LabelCode.StartsWith("OFF-", StringComparison.OrdinalIgnoreCase) || existing.RequestedByUserId != request.RequestedByUserId || existingLabel.ItemId != request.ItemId || existing.PrinterId != request.PrinterId ||
+       request.StorageLocationId is { } storageId && existingLabel.StorageLocationId != storageId || existingLabel.Quantity != request.Quantity || existingLabel.Unit != request.Unit ||
+       request.OperationalDateTime is { } requestedTime && existingLabel.OperationalDateTime != RestaurantOperationalDay.Resolve(requestedTime, restaurantTimeZone).ToUniversalTime())
+    throw new IdempotencyConflictException("This Idempotency-Key was already used for a different print request.");
+   return new(existing.LabelId, existingLabel.LabelCode, existing.Id, existing.Status, existing.FailureReason, true);
+  }
   // Item photos can be large; printing only needs the label fields and storage metadata.
   var item = await db.Items.Where(x => x.Id == request.ItemId && x.Active).Select(x => new {
    x.Id, x.Name, CategoryName = x.Category == null ? "Uncategorized" : x.Category.Name,
@@ -40,7 +47,11 @@ public sealed class LabelPrintService(KivraDbContext db, IExpiryCalculator expir
  }
  public async Task<PrintResult> ReprintAsync(Guid labelId, Guid userId, string key, CancellationToken ct) {
   if (string.IsNullOrWhiteSpace(key)) throw new ArgumentException("An Idempotency-Key is required.");
-  var prior = await db.PrintJobs.Include(x => x.Label).SingleOrDefaultAsync(x => x.IdempotencyKey == key, ct); if (prior is not null) return new(prior.LabelId, prior.Label!.LabelCode, prior.Id, prior.Status, prior.FailureReason, true);
+  var prior = await db.PrintJobs.Include(x => x.Label).SingleOrDefaultAsync(x => x.IdempotencyKey == key, ct); if (prior is not null) {
+   if (!prior.IsReprint || prior.LabelId != labelId || prior.RequestedByUserId != userId)
+    throw new IdempotencyConflictException("This Idempotency-Key was already used for a different print request.");
+   return new(prior.LabelId, prior.Label!.LabelCode, prior.Id, prior.Status, prior.FailureReason, true);
+  }
   var label = await db.Labels.FindAsync([labelId], ct) ?? throw new KeyNotFoundException("Label not found."); var printer = await db.Printers.FindAsync([label.PrinterId], ct) ?? throw new KeyNotFoundException("Printer not found.");
   var bridge = UsesBridge(printer);
   var job = new PrintJob { LabelId = label.Id, PrinterId = printer.Id, RequestedByUserId = userId, IdempotencyKey = key, IsReprint = true, Status = bridge ? PrintJobStatus.Queued : PrintJobStatus.Sending, StartedAt = bridge ? null : DateTimeOffset.UtcNow }; db.Add(job); job.Payload = tspl.Generate(label, printer, restaurantTimeZone);

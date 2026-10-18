@@ -8,15 +8,17 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/webp" href="/assets/kivra-routes-logo.webp">
   <link rel="apple-touch-icon" href="/assets/kivra-routes-logo.webp">
-  <link rel="stylesheet" href="/app.css?v=78">
-  <link rel="stylesheet" href="/printer.css?v=78">
-  <link rel="stylesheet" href="/visual-refresh.css?v=78">
-  <link rel="stylesheet" href="/command-center.css?v=78">
-  <link rel="stylesheet" href="/futuristic.css?v=78">
-  <link rel="stylesheet" href="/futuristic-panels.css?v=78">
+  <link rel="stylesheet" href="/app.css?v=79">
+  <link rel="stylesheet" href="/printer.css?v=79">
+  <link rel="stylesheet" href="/visual-refresh.css?v=79">
+  <link rel="stylesheet" href="/command-center.css?v=79">
+  <link rel="stylesheet" href="/futuristic.css?v=79">
+  <link rel="stylesheet" href="/futuristic-panels.css?v=79">
+  <link rel="stylesheet" href="/offline.css?v=79">
   <title>KIVRA by Routes | Kitchen Labels</title>
 </head>
 <body>
+  <aside id="offlineStatus" class="offline-status" role="status" aria-live="polite" hidden></aside>
   <div id="app" class="app-shell" aria-live="polite"></div>
   <div id="toast" class="toast" role="status"></div>
   <dialog id="loginDialog" class="login-dialog">
@@ -29,9 +31,11 @@
       <button class="btn btn-primary btn-block" type="submit">Sign in</button>
     </form>
   </dialog>
-  <script defer src="/food-category-rules.js?v=78"></script>
-  <script defer src="/food-photos.js?v=78"></script>
-  <script defer src="/ui-icons.js?v=78"></script>
-  <script defer src="/app.js?v=78"></script>
+  <script defer src="/food-category-rules.js?v=79"></script>
+  <script defer src="/food-photos.js?v=79"></script>
+  <script defer src="/ui-icons.js?v=79"></script>
+  <script defer src="/offline-store.js?v=79"></script>
+  <script defer src="/offline-client.js?v=79"></script>
+  <script defer src="/app.js?v=79"></script>
 </body>
 </html>

@@ -14,17 +14,19 @@ static class Program
         using var instance = new Mutex(true, @"Local\KIVRA.WindowsPrintBridge", out var first);
         if (!first) return;
         ApplicationConfiguration.Initialize();
-        Application.Run(new BridgeContext());
+        System.Windows.Forms.Application.Run(new BridgeContext());
     }
 }
 
 sealed class BridgeContext : ApplicationContext
 {
     const string Server = "https://kivralabels.redlanternrestaurant.in";
-    const string Version = "1.6.0";
+    const string Version = "1.7.0";
     readonly string dataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KIVRA", "PrintBridge");
     readonly HttpClient http = new() { Timeout = TimeSpan.FromSeconds(30) };
     readonly CancellationTokenSource stopping = new();
+    readonly SemaphoreSlim printGate = new(1, 1);
+    LocalPrintServer? localServer;
     readonly NotifyIcon tray;
     readonly ToolStripMenuItem statusMenu;
     readonly SynchronizationContext ui;
@@ -70,6 +72,7 @@ sealed class BridgeContext : ApplicationContext
             }
             InstallAutoStart();
             http.DefaultRequestHeaders.Add("X-Kivra-Bridge-Token", config.Token);
+            _ = RunLocalServerAsync(config, stopping.Token);
             await RunAsync(config, stopping.Token);
         }
         catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
@@ -130,7 +133,10 @@ sealed class BridgeContext : ApplicationContext
                 }
                 response.EnsureSuccessStatusCode();
                 var job = await response.Content.ReadFromJsonAsync<BridgeJob>(JsonOptions(), token) ?? throw new InvalidOperationException("The server returned an empty print job.");
-                var error = await Task.Run(() => WindowsPrinter.Send(current.QueueName, Encoding.ASCII.GetBytes(job.Payload)), token);
+                string? error;
+                await printGate.WaitAsync(token);
+                try { error = await Task.Run(() => WindowsPrinter.Send(current.QueueName, Encoding.ASCII.GetBytes(job.Payload)), token); }
+                finally { printGate.Release(); }
                 await Post<object>($"{current.Server}/api/bridge/jobs/{job.JobId}/complete", new { success = error is null, error }, token);
                 Log(error is null ? $"Printed {job.ItemName} ({job.LabelCode})" : $"Print failed: {error}");
                 if (error is not null)
@@ -155,6 +161,22 @@ sealed class BridgeContext : ApplicationContext
             if (DateTimeOffset.UtcNow - lastHeartbeat < TimeSpan.FromSeconds(20)) return;
             await Post<object>($"{current.Server}/api/bridge/heartbeat", new { appVersion = Version }, token);
             lastHeartbeat = DateTimeOffset.UtcNow;
+        }
+    }
+
+    async Task RunLocalServerAsync(BridgeConfig current, CancellationToken token)
+    {
+        try
+        {
+            var engine = new OfflinePrintEngine(dataDirectory, () => config?.QueueName ?? current.QueueName, WindowsPrinter.Send, printGate);
+            localServer = new LocalPrintServer(current.Server, dataDirectory, () => config?.QueueName ?? current.QueueName, current.DeviceName, Version, engine, Log);
+            await localServer.RunAsync(token);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            Log($"Local offline printing unavailable: {ex}");
+            Notify("Offline printing unavailable", "KIVRA could not start local printing. Cloud printing will keep running. Open the bridge log for details.", ToolTipIcon.Warning);
         }
     }
 
@@ -190,6 +212,7 @@ sealed class BridgeContext : ApplicationContext
     void ExitBridge()
     {
         stopping.Cancel();
+        localServer?.Dispose();
         tray.Visible = false;
         tray.Dispose();
         ExitThread();
