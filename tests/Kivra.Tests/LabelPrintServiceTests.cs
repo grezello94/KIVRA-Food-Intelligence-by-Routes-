@@ -11,6 +11,27 @@ namespace Kivra.Tests;
 public sealed class LabelPrintServiceTests
 {
     [Fact]
+    public async Task Recovery_codes_remain_distinct_and_preserve_codes_for_retries_and_reprints()
+    {
+        await using var fixture = await PrintFixture.CreateAsync(codeNamespace: "R261024");
+        var request = fixture.Request() with { OperationalDateTime = new DateTimeOffset(2026, 9, 24, 12, 0, 0, TimeSpan.FromHours(5.5)) };
+
+        var first = await fixture.Service.PrintAsync(request, CancellationToken.None);
+        var second = await fixture.Service.PrintAsync(request with { IdempotencyKey = Guid.NewGuid().ToString("N") }, CancellationToken.None);
+        var repeated = await fixture.Service.PrintAsync(request, CancellationToken.None);
+        var reprinted = await fixture.Service.ReprintAsync(first.LabelId, request.RequestedByUserId, Guid.NewGuid().ToString("N"), CancellationToken.None);
+
+        Assert.StartsWith("R261024-260924-", first.LabelCode);
+        Assert.NotEqual(first.LabelCode, second.LabelCode);
+        Assert.True(repeated.Idempotent);
+        Assert.Equal(first.LabelCode, repeated.LabelCode);
+        Assert.Equal(first.PrintJobId, repeated.PrintJobId);
+        Assert.Equal(first.LabelCode, reprinted.LabelCode);
+        Assert.Equal(2, await fixture.Db.Labels.CountAsync());
+        Assert.Equal(3, fixture.Printer.Commands.Count);
+    }
+
+    [Fact]
     public async Task Prints_without_photo_or_storage_roundtrip_and_commits_sending_before_io()
     {
         await using var fixture = await PrintFixture.CreateAsync();
@@ -214,7 +235,7 @@ public sealed class LabelPrintServiceTests
         public required Guid PrinterId { get; init; }
         public PrintLabelRequest Request() => new(ItemId, PrinterId, Guid.NewGuid(), null, null, null, null, Guid.NewGuid().ToString("N"));
 
-        public static async Task<PrintFixture> CreateAsync(string driver = "Fake")
+        public static async Task<PrintFixture> CreateAsync(string driver = "Fake", string? codeNamespace = null)
         {
             var connection = new SqliteConnection("Data Source=:memory:");
             await connection.OpenAsync();
@@ -233,7 +254,7 @@ public sealed class LabelPrintServiceTests
             await db.SaveChangesAsync();
             db.ChangeTracker.Clear();
             commands.Clear();
-            return new PrintFixture { Connection = connection, Db = db, Printer = printer, Saves = observer, Commands = commands, ItemId = item.Id, PrinterId = configuration.Id, Service = new LabelPrintService(db, new ExpiryCalculator(), new LabelCodeGenerator(), new TsplGenerator(), [printer], TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")) };
+            return new PrintFixture { Connection = connection, Db = db, Printer = printer, Saves = observer, Commands = commands, ItemId = item.Id, PrinterId = configuration.Id, Service = new LabelPrintService(db, new ExpiryCalculator(), new LabelCodeGenerator(codeNamespace), new TsplGenerator(), [printer], TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")) };
         }
 
         public async ValueTask DisposeAsync()

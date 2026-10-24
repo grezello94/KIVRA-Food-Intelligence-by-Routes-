@@ -95,6 +95,8 @@ PORT=8080
 
 Alternatively set `DATABASE_URL` to the PostgreSQL connection URL instead of the individual `POSTGRES_*` values. On Coolify startup, KIVRA automatically applies committed PostgreSQL migrations and seeds the initial administrator account when needed.
 
+For an instance recovered from incomplete label history, set `LabelCodes__Namespace` to a distinct prefix such as `R261024` (1–8 uppercase letters or digits, excluding the reserved prefix `OFF`). New online label codes then include that prefix, the operational date and a full random UUID, so missing history or backdated preparation times cannot restart the old code sequence. Codes remain at most 48 characters; existing labels and reprints retain their codes. Leaving this setting unset preserves the daily `RL-yyMMdd-0001` format.
+
 If the app is hosted on the Contabo server and the printer is still on a restaurant LAN or USB-attached computer, configure the printer with the `AndroidBridge` driver and its reserved LAN IP address (normally port `9100`). The Coolify service stores print jobs until a paired bridge claims them. If the Contabo server is on the same private network or connected by VPN to the printer LAN, `TscTsplNetwork` can print directly.
 
 The production bridge URL is `https://kivralabels.redlanternrestaurant.in`. After moving an existing installation from another server or local development, pair the bridge once again from **More > Print Bridge** because bridge credentials belong to the server database.
