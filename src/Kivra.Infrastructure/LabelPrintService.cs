@@ -14,6 +14,8 @@ public sealed class LabelPrintService(KivraDbContext db, IExpiryCalculator expir
     throw new IdempotencyConflictException("This Idempotency-Key was already used for a different print request.");
    return new(existing.LabelId, existingLabel.LabelCode, existing.Id, existing.Status, existing.FailureReason, true);
   }
+  if (await RetiredPrintRequests.ContainsAsync(db, request.IdempotencyKey, ct))
+   throw new IdempotencyConflictException("This print request belongs to deleted label history and cannot be printed again. Start a new print request if another label is needed.");
   // Item photos can be large; printing only needs the label fields and storage metadata.
   var item = await db.Items.Where(x => x.Id == request.ItemId && x.Active).Select(x => new {
    x.Id, x.Name, CategoryName = x.Category == null ? "Uncategorized" : x.Category.Name,
@@ -52,6 +54,8 @@ public sealed class LabelPrintService(KivraDbContext db, IExpiryCalculator expir
     throw new IdempotencyConflictException("This Idempotency-Key was already used for a different print request.");
    return new(prior.LabelId, prior.Label!.LabelCode, prior.Id, prior.Status, prior.FailureReason, true);
   }
+  if (await RetiredPrintRequests.ContainsAsync(db, key, ct))
+   throw new IdempotencyConflictException("This Idempotency-Key belongs to deleted label history.");
   var label = await db.Labels.FindAsync([labelId], ct) ?? throw new KeyNotFoundException("Label not found."); var printer = await db.Printers.FindAsync([label.PrinterId], ct) ?? throw new KeyNotFoundException("Printer not found.");
   var bridge = UsesBridge(printer);
   var job = new PrintJob { LabelId = label.Id, PrinterId = printer.Id, RequestedByUserId = userId, IdempotencyKey = key, IsReprint = true, Status = bridge ? PrintJobStatus.Queued : PrintJobStatus.Sending, StartedAt = bridge ? null : DateTimeOffset.UtcNow }; db.Add(job); job.Payload = tspl.Generate(label, printer, restaurantTimeZone);

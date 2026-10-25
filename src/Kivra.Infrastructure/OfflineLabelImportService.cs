@@ -20,6 +20,8 @@ public sealed class OfflineLabelImportService(KivraDbContext db, IExpiryCalculat
                 throw new IdempotencyConflictException("This Idempotency-Key was already used for a different print operation.");
             return new(prior.LabelId, prior.Label.LabelCode, prior.Id, prior.Status, prior.FailureReason, true);
         }
+        if (await RetiredPrintRequests.ContainsAsync(db, request.IdempotencyKey, ct))
+            throw new IdempotencyConflictException("This Idempotency-Key belongs to deleted label history.");
         // Current names/rules/active flags may have changed during an outage.
         // Validate identity while retaining the actual printed snapshot.
         if (!await db.Items.AnyAsync(x => x.Id == request.ItemId, ct) ||

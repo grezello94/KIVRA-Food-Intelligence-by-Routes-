@@ -15,6 +15,14 @@ public sealed class PrinterOperations(KivraDbContext db, IEnumerable<ILabelPrint
  static string PlatformName(string platform)=>platform=="windows"?"Windows":"Android";
 }
 public sealed class ExpiryNotificationWorker(IServiceScopeFactory scopes, ILogger<ExpiryNotificationWorker> log) : BackgroundService {
+ DateTimeOffset? lastRetentionRun;
  protected override async Task ExecuteAsync(CancellationToken stoppingToken) { while(!stoppingToken.IsCancellationRequested) { try { await Process(stoppingToken); } catch(Exception ex) { log.LogError(ex,"Expiry processing failed"); } await Task.Delay(TimeSpan.FromMinutes(5),stoppingToken); } }
- async Task Process(CancellationToken ct) { using var scope=scopes.CreateScope(); var db=scope.ServiceProvider.GetRequiredService<KivraDbContext>(); var now=DateTimeOffset.UtcNow; var active=await db.Labels.Where(x=>x.CurrentStatus==LabelStatus.Active).ToListAsync(ct); var expired=active.Where(x=>x.ExpiryDateTime<=now).ToList(); foreach(var label in expired) { label.CurrentStatus=LabelStatus.Expired; db.Notifications.Add(new Notification { Type="Expired",Title="Item expired",Message=$"{label.ItemNameSnapshot} ({label.LabelCode}) is expired.",LabelId=label.Id }); db.AuditLogs.Add(new AuditLog { Action="LabelExpired",EntityName="Label",EntityId=label.Id }); } if(expired.Count>0)await db.SaveChangesAsync(ct); }
+ async Task Process(CancellationToken ct) { using var scope=scopes.CreateScope(); var db=scope.ServiceProvider.GetRequiredService<KivraDbContext>(); var now=DateTimeOffset.UtcNow; var active=await db.Labels.Where(x=>x.CurrentStatus==LabelStatus.Active).ToListAsync(ct); var expired=active.Where(x=>x.ExpiryDateTime<=now).ToList(); foreach(var label in expired) { label.CurrentStatus=LabelStatus.Expired; db.Notifications.Add(new Notification { Type="Expired",Title="Item expired",Message=$"{label.ItemNameSnapshot} ({label.LabelCode}) is expired.",LabelId=label.Id }); db.AuditLogs.Add(new AuditLog { Action="LabelExpired",EntityName="Label",EntityId=label.Id }); } if(expired.Count>0)await db.SaveChangesAsync(ct);
+  var retention=scope.ServiceProvider.GetRequiredService<LabelHistoryRetention>();
+  if(retention.Enabled && (lastRetentionRun is null || now-lastRetentionRun.Value>=TimeSpan.FromHours(1))) {
+   var deleted=await retention.DeleteExpiredAsync(now,ct);
+   lastRetentionRun=now;
+   if(deleted>0)log.LogInformation("Deleted {Count} labels beyond the configured expiry retention period",deleted);
+  }
+ }
 }
