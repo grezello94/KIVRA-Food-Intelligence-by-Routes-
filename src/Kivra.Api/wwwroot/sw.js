@@ -1,9 +1,9 @@
-const CACHE='kivra-shell-v82';
+const CACHE='kivra-shell-v83';
 const SHELL=[
- '/index.html','/app.css?v=82','/printer.css?v=82','/visual-refresh.css?v=82',
- '/command-center.css?v=82','/futuristic.css?v=82','/futuristic-panels.css?v=82',
- '/offline.css?v=82','/assets/kivra-routes-logo.webp','/food-category-rules.js?v=82',
- '/food-photos.js?v=82','/ui-icons.js?v=82','/offline-store.js?v=82','/offline-client.js?v=82','/app.js?v=82',
+ '/index.html','/app.css?v=83','/printer.css?v=83','/visual-refresh.css?v=83',
+ '/command-center.css?v=83','/futuristic.css?v=83','/futuristic-panels.css?v=83',
+ '/offline.css?v=83','/assets/kivra-routes-logo.webp','/food-category-rules.js?v=83',
+ '/food-photos.js?v=83','/ui-icons.js?v=83','/offline-store.js?v=83','/offline-client.js?v=83','/app.js?v=83',
  '/manifest.webmanifest'
 ];
 // Cache the complete local photo catalog after the small application shell.
