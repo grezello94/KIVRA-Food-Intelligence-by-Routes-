@@ -14,6 +14,7 @@
       this.status = { online: true, syncing: false, pending: 0, blocked: 0, storageError: '', lastSyncedAt: null };
       this.chain = Promise.resolve();
       this.localSession = null;
+      this.localTests = new Map();
       this.syncRun = null;
     }
     userId() { return this.getSession().user?.id; }
@@ -109,13 +110,13 @@
       if (method === 'POST' && /^\/api\/(items|categories|storage-locations|printers)$/.test(path)) body.id ||= this.newId();
       if (kind.print) body.operationalDateTime ||= new Date().toISOString();
       let operation = { id, path, method, body: JSON.stringify(body), createdAt: new Date().toISOString(), status: 'pending', type: 'server' };
-      if (kind.print && this.localPrinterId() === body.printerId) {
+      if (kind.print && await this.prepareLocal(body.printerId, owner)) {
         operation.type = 'local-print';
         operation.localRequest = this.printSnapshot(body, id);
       }
       if (kind.reprint) {
         const label = this.getSnapshot().labels?.find(x => x.id === path.split('/')[3]);
-        if (label && this.localPrinterId() === label.printerId) { operation.type = 'local-print'; operation.localRequest = this.reprintSnapshot(label, id); }
+        if (label && await this.prepareLocal(label.printerId, owner)) { operation.type = 'local-print'; operation.localRequest = this.reprintSnapshot(label, id); }
       }
       if (configWrite(path, method) && method !== 'POST') {
         const field = { items: 'items', printers: 'allPrinters', 'storage-locations': 'allLocations', labels: 'labels' }[path.split('/')[2]];
@@ -238,19 +239,80 @@
       } catch (error) {
         if (!error.status) {
           error.network = true;
-          error.message = 'Cannot reach the Windows USB bridge. Keep the updated bridge running and allow local network access in this browser. This label is saved on this PC.';
+          error.message = 'Cannot reach the printer service on this PC. Open KIVRA Print Bridge and allow local device access in this browser, then check the printer again.';
         }
         throw error;
       } finally { clearTimeout(timer); }
     }
     async connectLocal() { this.localSession = await this.localFetch('/v1/session'); return this.localSession; }
+    async prepareLocal(printerId, owner = this.owner()) {
+      this.requireOwner(owner);
+      const printer = this.getSnapshot().printers?.find(x => x.id === printerId);
+      if (!printer || printer.driver !== 'TscTsplUsb' || printer.enabled === false) return false;
+      if (this.localPrinterId?.() === printerId) return true;
+      if (!this.autoLocal) return false;
+      let session;
+      try { session = await this.connectLocal(); }
+      catch (error) { this.requireOwner(owner); return !!this.requireLocal; }
+      this.requireOwner(owner);
+      if (!session.queueName || session.ready === false) return !!this.requireLocal;
+      if (printer.usbQueueName && printer.usbQueueName.toLowerCase() !== session.queueName.toLowerCase()) return false;
+      this.onLocalPrinter?.(printerId, session);
+      return true;
+    }
+    async localAuthorized(path, options, owner = this.owner()) {
+      this.requireOwner(owner);
+      let session = this.localSession || await this.connectLocal();
+      this.requireOwner(owner);
+      const send = () => this.localFetch(path, { ...options, headers: { ...options?.headers, 'X-Kivra-Local-Token': session.token } });
+      try { return await send(); }
+      catch (error) {
+        if (error.status !== 401) throw error;
+        // A 401 rejects the request before spooler I/O. Only this definite
+        // rejection can refresh the installation token and retry the same key.
+        this.localSession = null;
+        this.requireOwner(owner);
+        session = await this.connectLocal();
+        this.requireOwner(owner);
+        return send();
+      }
+    }
+    async selectLocalPrinter(queueName) {
+      const owner = this.owner();
+      const result = await this.localAuthorized('/v1/printer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ queueName }) }, owner);
+      this.requireOwner(owner);
+      this.localSession = { ...this.localSession, ...result };
+      return this.localSession;
+    }
+    async testLocal(printer) {
+      const owner = this.owner();
+      this.requireOwner(owner);
+      if (printer.driver !== 'TscTsplUsb') throw Error('Select a TSC USB label printer for local printing.');
+      const session = await this.connectLocal();
+      this.requireOwner(owner);
+      if (!session.capabilities?.includes('test-print')) throw Error('Update the printer service to 1.8.0 to test this PC’s printer directly.');
+      const testId = `${owner.userId}:${printer.id}`;
+      let body = this.localTests.get(testId) || this.loadLocalTest?.(printer.id);
+      if (!body) {
+        body = { idempotencyKey: this.newId(), printer: copy(printer), restaurantTimeZoneId: this.getSnapshot().restaurantTimeZoneId || 'Asia/Kolkata' };
+        this.saveLocalTest?.(printer.id, body);
+        this.localTests.set(testId, body);
+      }
+      try {
+        const result = await this.localAuthorized('/v1/test-print', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, owner);
+        this.requireOwner(owner);
+        if (result.status === 'Printed') { this.localTests.delete(testId); this.saveLocalTest?.(printer.id, null); }
+        return result;
+      } catch (error) {
+        if (!error.status && error.code !== 'ACCOUNT_CHANGED') error.message = 'The test print response was interrupted. Check the physical label. Check again will recover this same test without printing another copy.';
+        throw error;
+      }
+    }
     async sendLocal(operation, owner = this.owner()) {
       this.requireOwner(owner);
       const userId = owner.userId;
-      const session = this.localSession || await this.connectLocal();
-      this.requireOwner(owner);
       let result;
-      try { result = await this.localFetch('/v1/print', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Kivra-Local-Token': session.token }, body: JSON.stringify(operation.localRequest) }); }
+      try { result = await this.localAuthorized('/v1/print', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(operation.localRequest) }, owner); }
       catch (error) { if (error.status === 401) this.localSession = null; throw error; }
       if (result.status !== 'Printed') {
         operation.status = 'blocked'; operation.error = result.failureReason || 'Check the printer before trying another label. Its last outcome is uncertain.';

@@ -40,4 +40,6 @@ jobs:
       - name: Validate browser scripts
         run: |
           node --check src/Kivra.Api/wwwroot/app.js
+          node --check src/Kivra.Api/wwwroot/offline-client.js
           node --check src/Kivra.Api/wwwroot/food-category-rules.js
+          node --test tests/Kivra.Web.Tests/*.test.cjs

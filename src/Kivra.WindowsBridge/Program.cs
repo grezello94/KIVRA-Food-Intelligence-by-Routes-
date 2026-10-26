@@ -21,19 +21,25 @@ static class Program
 sealed class BridgeContext : ApplicationContext
 {
     const string Server = "https://kivralabels.redlanternrestaurant.in";
-    const string Version = "1.7.0";
+    const string Version = "1.8.0";
     readonly string dataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KIVRA", "PrintBridge");
     readonly HttpClient http = new() { Timeout = TimeSpan.FromSeconds(30) };
     readonly CancellationTokenSource stopping = new();
     readonly SemaphoreSlim printGate = new(1, 1);
+    readonly object configurationSync = new();
     LocalPrintServer? localServer;
     readonly NotifyIcon tray;
     readonly ToolStripMenuItem statusMenu;
     readonly SynchronizationContext ui;
     StatusForm? statusForm;
-    BridgeConfig? config;
-    string status = "Starting…";
-    bool offline;
+    BridgeConfig config = new(Server, "", "", $"{Environment.MachineName} USB Print Bridge");
+    IReadOnlyList<string> installedQueues = [];
+    IReadOnlyDictionary<string, string> installedDrivers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    string? rejectedCloudToken;
+    bool localServerReady;
+    string? localServerError;
+    string status = "Starting local USB printing…";
+    bool cloudOffline;
 
     string ConfigPath => Path.Combine(dataDirectory, "windows-bridge.json");
     string LogPath => Path.Combine(dataDirectory, "bridge.log");
@@ -45,6 +51,7 @@ sealed class BridgeContext : ApplicationContext
         statusMenu = new ToolStripMenuItem(status) { Enabled = false };
         var menu = new ContextMenuStrip();
         menu.Items.Add(statusMenu);
+        menu.Items.Add("Open KIVRA printer settings", null, (_, _) => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Server + "/#printer-setup") { UseShellExecute = true }));
         menu.Items.Add("Open status", null, (_, _) => ShowStatus());
         menu.Items.Add("Open log", null, (_, _) => OpenLog());
         menu.Items.Add(new ToolStripSeparator());
@@ -58,138 +65,262 @@ sealed class BridgeContext : ApplicationContext
     {
         try
         {
-            MigrateLegacyConfig();
-            config = LoadConfig();
-            if (config is null)
+            try
             {
-                var setup = ShowSetup();
-                if (setup is null) { ExitBridge(); return; }
-                SetStatus("Pairing with KIVRA…");
-                var pair = await Post<PairResponse>($"{Server}/api/bridge/pair", new { code = setup.Value.Code, deviceName = $"{Environment.MachineName} USB Print Bridge", appVersion = Version, platform = "windows" });
-                config = new(Server, pair.Token, setup.Value.Queue, pair.DeviceName);
-                SaveConfig(config);
-                Notify("Setup complete", "KIVRA Print Bridge will now run quietly in the notification area.", ToolTipIcon.Info);
+                MigrateLegacyConfig();
+                var saved = LoadConfig();
+                if (saved is not null) config = new(Server, saved.Token ?? "", saved.QueueName ?? "", string.IsNullOrWhiteSpace(saved.DeviceName) ? config.DeviceName : saved.DeviceName);
             }
-            InstallAutoStart();
-            http.DefaultRequestHeaders.Add("X-Kivra-Bridge-Token", config.Token);
-            _ = RunLocalServerAsync(config, stopping.Token);
-            await RunAsync(config, stopping.Token);
+            catch (Exception ex) { Log($"Saved settings could not be read; local USB printing will still start: {ex.Message}"); }
+
+            // The loopback listener and printer monitor never require a cloud
+            // token, a pairing code, or a successful internet request.
+            _ = RunLocalServerAsync(stopping.Token);
+            var running = RunAsync(stopping.Token);
+            try { await Task.Run(InstallAutoStart, stopping.Token); }
+            catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
+            catch (Exception ex) { Log($"Automatic startup could not be installed: {ex.Message}"); }
+            await running;
         }
         catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
         catch (Exception ex)
         {
-            Log($"Fatal error: {ex}");
-            ui.Post(_ =>
-            {
-                MessageBox.Show($"KIVRA Print Bridge could not start.\n\n{ex.Message}\n\nDetails: {LogPath}", "KIVRA Print Bridge", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                ExitBridge();
-            }, null);
+            Log($"Bridge startup error: {ex}");
+            SetStatus("Open KIVRA printer settings to check USB printing");
+            Notify("Check KIVRA Print Bridge", $"Open the bridge log for details: {ex.Message}", ToolTipIcon.Error);
         }
     }
 
-    async Task RunAsync(BridgeConfig current, CancellationToken token)
+    async Task RunAsync(CancellationToken token)
     {
         var lastHeartbeat = DateTimeOffset.MinValue;
+        var lastCloudToken = "";
         var queues = new PrinterQueueMonitor(WindowsPrinter.GetQueues);
-        var printerAvailable = false;
-        // Validate a saved queue once before claiming work after startup. A USB
-        // queue may have been renamed while the bridge was stopped.
         queues.RefreshIfDue();
         while (!token.IsCancellationRequested)
         {
+            var attemptedCloudToken = "";
             try
             {
-                // Queue discovery can block in the Windows spooler. Refresh it in
-                // the background while idle, never before each queued label.
                 if (await queues.ApplyRefreshAsync())
                 {
-                    var knownQueues = queues.KnownQueues!;
-                    printerAvailable = knownQueues.Contains(current.QueueName, StringComparer.OrdinalIgnoreCase);
-                    if (!printerAvailable && DetectTsc(knownQueues) is { } replacement)
+                    lock (configurationSync)
                     {
-                        current = current with { QueueName = replacement };
-                        config = current;
-                        SaveConfig(current);
-                        printerAvailable = true;
-                        Log($"USB printer reconnected as: {replacement}");
+                        installedQueues = queues.KnownQueues!.ToArray();
+                        installedDrivers = WindowsPrinter.GetCachedDriverNames();
                     }
+                    await SelectDefaultQueueAsync(token);
                 }
-                if (!printerAvailable)
+                var current = ReadConfig();
+                bool queueInstalled;
+                bool cloudRejected;
+                lock (configurationSync)
                 {
-                    SetStatus($"Waiting for printer: {current.QueueName}");
+                    queueInstalled = installedQueues.Contains(current.QueueName, StringComparer.OrdinalIgnoreCase);
+                    cloudRejected = rejectedCloudToken == current.Token;
+                }
+                if (!queueInstalled)
+                {
+                    SetConnectionStatus();
                     queues.RefreshIfDue(retrySoon: true);
                     await Task.Delay(250, token);
                     continue;
                 }
-                if (offline) { offline = false; Notify("Connection restored", "KIVRA Print Bridge is connected again.", ToolTipIcon.Info); }
-                SetStatus($"Ready — {current.QueueName}");
-                using var response = await http.PostAsync($"{current.Server}/api/bridge/jobs/claim", null, token);
-                if (response.StatusCode == System.Net.HttpStatusCode.NoContent)
+                if (string.IsNullOrWhiteSpace(current.Token) || cloudRejected)
                 {
+                    SetConnectionStatus(cloudRejected ? "shared printing needs reconnection in KIVRA" : null);
                     queues.RefreshIfDue();
-                    await HeartbeatIfDue();
                     await Task.Delay(250, token);
                     continue;
                 }
+                if (lastCloudToken != current.Token)
+                {
+                    lastCloudToken = current.Token;
+                    lastHeartbeat = DateTimeOffset.MinValue;
+                }
+                attemptedCloudToken = current.Token;
+                using var response = await SendCloudAsync(current, "/api/bridge/jobs/claim", null, token);
                 response.EnsureSuccessStatusCode();
+                if (cloudOffline)
+                {
+                    cloudOffline = false;
+                    Notify("Shared printing reconnected", "Local USB printing and shared printing are available.", ToolTipIcon.Info);
+                }
+                SetConnectionStatus();
+                if (response.StatusCode == System.Net.HttpStatusCode.NoContent)
+                {
+                    queues.RefreshIfDue();
+                    await HeartbeatIfDue(current);
+                    await Task.Delay(250, token);
+                    continue;
+                }
                 var job = await response.Content.ReadFromJsonAsync<BridgeJob>(JsonOptions(), token) ?? throw new InvalidOperationException("The server returned an empty print job.");
                 string? error;
                 await printGate.WaitAsync(token);
-                try { error = await Task.Run(() => WindowsPrinter.Send(current.QueueName, Encoding.ASCII.GetBytes(job.Payload)), token); }
+                try
+                {
+                    var selectedQueue = ReadConfig().QueueName;
+                    error = await Task.Run(() => WindowsPrinter.Send(selectedQueue, Encoding.ASCII.GetBytes(job.Payload)), token);
+                }
                 finally { printGate.Release(); }
-                await Post<object>($"{current.Server}/api/bridge/jobs/{job.JobId}/complete", new { success = error is null, error }, token);
+                await PostCloudAsync(current, $"/api/bridge/jobs/{job.JobId}/complete", new { success = error is null, error }, token);
                 Log(error is null ? $"Printed {job.ItemName} ({job.LabelCode})" : $"Print failed: {error}");
                 if (error is not null)
                 {
                     queues.RefreshIfDue(force: true);
                     Notify("Print failed", error, ToolTipIcon.Error);
                 }
-                await HeartbeatIfDue();
+                await HeartbeatIfDue(current);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { break; }
+            catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                lock (configurationSync)
+                {
+                    // A late response for an old token must not disable a new
+                    // registration received through the local web-app endpoint.
+                    if (config.Token == attemptedCloudToken) rejectedCloudToken = attemptedCloudToken;
+                }
+                Log("Shared-print authentication was rejected (401). Local USB printing remains available; reconnect shared printing in KIVRA.");
+                SetConnectionStatus("shared printing needs reconnection in KIVRA");
+                cloudOffline = false;
+            }
             catch (Exception ex)
             {
-                Log($"Bridge error: {ex.Message}");
-                SetStatus("Offline — retrying automatically");
-                if (!offline) { offline = true; Notify("Connection interrupted", "KIVRA cannot reach the server. It will keep retrying in the background.", ToolTipIcon.Warning); }
+                Log($"Shared printing or printer discovery: {ex.Message}");
+                SetConnectionStatus("shared printing is offline");
+                cloudOffline = true;
+                queues.RefreshIfDue(retrySoon: true);
                 await Task.Delay(5000, token);
             }
         }
 
-        async Task HeartbeatIfDue()
+        async Task HeartbeatIfDue(BridgeConfig current)
         {
             if (DateTimeOffset.UtcNow - lastHeartbeat < TimeSpan.FromSeconds(20)) return;
-            await Post<object>($"{current.Server}/api/bridge/heartbeat", new { appVersion = Version }, token);
+            await PostCloudAsync(current, "/api/bridge/heartbeat", new { appVersion = Version }, token);
             lastHeartbeat = DateTimeOffset.UtcNow;
         }
     }
 
-    async Task RunLocalServerAsync(BridgeConfig current, CancellationToken token)
+    BridgeConfig ReadConfig() { lock (configurationSync) return config; }
+
+    void SetConnectionStatus(string? sharedStatus = null)
+    {
+        var snapshot = GetPrinterSnapshot();
+        string message;
+        lock (configurationSync)
+        {
+            message = !localServerReady ? localServerError ?? "Starting local USB printing…" :
+                !snapshot.PrinterAvailable ? snapshot.Detail ?? "Choose a TSC USB printer in KIVRA" :
+                sharedStatus is null ? $"Local USB ready — {snapshot.QueueName}" : $"Local USB ready; {sharedStatus}";
+        }
+        SetStatus(message);
+    }
+
+    LocalPrinterSnapshot GetPrinterSnapshot()
+    {
+        lock (configurationSync)
+        {
+                var installed = installedQueues.Select(name =>
+                {
+                    var compatible = PrinterQueueSelection.IsCompatible(name, installedDrivers.GetValueOrDefault(name));
+                    return new LocalPrinterQueue(name, compatible, compatible, compatible ? null : "Choose a supported TSC label printer.", installedDrivers.GetValueOrDefault(name));
+                }).ToArray();
+            var ready = installed.Any(queue => queue.Compatible && queue.QueueName.Equals(config.QueueName, StringComparison.OrdinalIgnoreCase));
+            var detail = ready ? "Windows USB printer queue is installed. Use Test Print to confirm physical output." : installed.Any(queue => queue.Compatible) ? "Choose the USB label printer in KIVRA printer settings." : "Connect the USB label printer and install its Windows printer driver.";
+            return new(config.QueueName, ready, installed, detail);
+        }
+    }
+
+    async Task SelectDefaultQueueAsync(CancellationToken token)
+    {
+        await printGate.WaitAsync(token);
+        try
+        {
+            lock (configurationSync)
+            {
+                var selected = PrinterQueueSelection.SelectDefault(config.QueueName, installedQueues, installedDrivers);
+                if (selected == config.QueueName) return;
+                var replacement = config with { QueueName = selected };
+                SaveConfig(replacement);
+                config = replacement;
+                Log($"USB printer selected automatically: {selected}");
+            }
+        }
+        finally { printGate.Release(); }
+    }
+
+    async Task SelectPrinterAsync(string queueName, CancellationToken token)
+    {
+        await printGate.WaitAsync(token);
+        try
+        {
+            lock (configurationSync)
+            {
+                var installed = installedQueues.FirstOrDefault(name => name.Equals(queueName, StringComparison.OrdinalIgnoreCase));
+                if (installed is null || !PrinterQueueSelection.IsCompatible(installed, installedDrivers.GetValueOrDefault(installed))) throw new ArgumentException("Select an installed TSC USB label printer.");
+                var replacement = config with { QueueName = installed };
+                SaveConfig(replacement);
+                config = replacement;
+            }
+        }
+        finally { printGate.Release(); }
+    }
+
+    async Task RegisterCloudAsync(LocalCloudRegistration registration, CancellationToken token)
+    {
+        if (!Uri.TryCreate(registration.Server, UriKind.Absolute, out var website) ||
+            website.GetLeftPart(UriPartial.Authority) != Server || website.AbsolutePath != "/" ||
+            website.UserInfo.Length != 0 || website.Query.Length != 0 || website.Fragment.Length != 0)
+            throw new ArgumentException("Shared printing must use the trusted KIVRA website.");
+        if (string.IsNullOrWhiteSpace(registration.Token) || registration.Token.Length > 8192 ||
+            !registration.Token.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_') ||
+            string.IsNullOrWhiteSpace(registration.DeviceName) || registration.DeviceName.Length > 100)
+            throw new ArgumentException("The shared-print registration is incomplete.");
+        await printGate.WaitAsync(token);
+        try
+        {
+            lock (configurationSync)
+            {
+                var replacement = config with { Server = Server, Token = registration.Token, DeviceName = registration.DeviceName.Trim() };
+                SaveConfig(replacement);
+                config = replacement;
+                rejectedCloudToken = null;
+            }
+            Log("Shared printing connected through KIVRA. Local USB settings were retained.");
+        }
+        finally { printGate.Release(); }
+    }
+
+    async Task RunLocalServerAsync(CancellationToken token)
     {
         try
         {
-            var engine = new OfflinePrintEngine(dataDirectory, () => config?.QueueName ?? current.QueueName, WindowsPrinter.Send, printGate);
-            localServer = new LocalPrintServer(current.Server, dataDirectory, () => config?.QueueName ?? current.QueueName, current.DeviceName, Version, engine, Log);
-            await localServer.RunAsync(token);
+            var engine = new OfflinePrintEngine(dataDirectory, () => ReadConfig().QueueName, WindowsPrinter.Send, printGate);
+            localServer = new LocalPrintServer(Server, dataDirectory, () => ReadConfig().QueueName, ReadConfig().DeviceName, Version, engine, Log,
+                getPrinterSnapshot: GetPrinterSnapshot, selectPrinter: SelectPrinterAsync, registerCloud: RegisterCloudAsync);
+            var running = localServer.RunAsync(token);
+            if (running.IsFaulted) await running;
+            lock (configurationSync) { localServerReady = true; localServerError = null; }
+            await running;
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (Exception ex)
         {
-            Log($"Local offline printing unavailable: {ex}");
-            Notify("Offline printing unavailable", "KIVRA could not start local printing. Cloud printing will keep running. Open the bridge log for details.", ToolTipIcon.Warning);
+            Log($"Local USB printing unavailable: {ex}");
+            lock (configurationSync) { localServerReady = false; localServerError = "Local USB printing needs attention — open the bridge log"; }
+            SetConnectionStatus();
+            Notify("Check local USB printing", "KIVRA could not start the local connection. Open the bridge log for details.", ToolTipIcon.Warning);
         }
-    }
-
-    (string Code, string Queue)? ShowSetup()
-    {
-        using var form = new SetupForm(WindowsPrinter.GetQueues());
-        return form.ShowDialog() == DialogResult.OK ? (form.PairingCode, form.QueueName) : null;
+        finally { lock (configurationSync) localServerReady = false; }
     }
 
     void ShowStatus()
     {
+        var current = ReadConfig();
         if (statusForm is null || statusForm.IsDisposed) statusForm = new StatusForm();
-        statusForm.UpdateStatus(status, config?.Server ?? Server, config?.QueueName ?? "Not configured", LogPath);
+        statusForm.UpdateStatus(status, Server, string.IsNullOrWhiteSpace(current.QueueName) ? "Not detected" : current.QueueName, LogPath);
         statusForm.Show();
         statusForm.Activate();
     }
@@ -200,7 +331,7 @@ sealed class BridgeContext : ApplicationContext
         statusMenu.Text = value;
         var tip = $"KIVRA Print Bridge — {value}";
         tray.Text = tip[..Math.Min(63, tip.Length)];
-        statusForm?.UpdateStatus(status, config?.Server ?? Server, config?.QueueName ?? "Not configured", LogPath);
+        statusForm?.UpdateStatus(status, Server, ReadConfig().QueueName, LogPath);
     }, null);
 
     void Notify(string title, string message, ToolTipIcon icon) => ui.Post(_ => tray.ShowBalloonTip(5000, title, message, icon), null);
@@ -227,8 +358,12 @@ sealed class BridgeContext : ApplicationContext
         if (!File.Exists(ConfigPath) && File.Exists(legacy)) File.Copy(legacy, ConfigPath);
     }
     BridgeConfig? LoadConfig() => File.Exists(ConfigPath) ? JsonSerializer.Deserialize<BridgeConfig>(File.ReadAllText(ConfigPath), JsonOptions()) : null;
-    void SaveConfig(BridgeConfig value) => File.WriteAllText(ConfigPath, JsonSerializer.Serialize(value, JsonOptions()));
-    static string? DetectTsc(IReadOnlyList<string> queues) => queues.FirstOrDefault(x => x.Contains("TA220", StringComparison.OrdinalIgnoreCase)) ?? queues.FirstOrDefault(x => x.Contains("TSC", StringComparison.OrdinalIgnoreCase));
+    void SaveConfig(BridgeConfig value)
+    {
+        var temporary = ConfigPath + ".tmp";
+        File.WriteAllText(temporary, JsonSerializer.Serialize(value, JsonOptions()));
+        File.Move(temporary, ConfigPath, overwrite: true);
+    }
 
     static void InstallAutoStart()
     {
@@ -241,45 +376,20 @@ sealed class BridgeContext : ApplicationContext
         using var key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
         key?.SetValue("KIVRA Windows Print Bridge", $"\"{installed}\" --background");
     }
-    async Task<T> Post<T>(string url, object body, CancellationToken token = default)
+    async Task<HttpResponseMessage> SendCloudAsync(BridgeConfig current, string path, object? body, CancellationToken token)
     {
-        using var response = await http.PostAsJsonAsync(url, body, JsonOptions(), token);
-        if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"Server returned {(int)response.StatusCode}: {await response.Content.ReadAsStringAsync(token)}");
-        if (typeof(T) == typeof(object)) return (T)new object();
-        return await response.Content.ReadFromJsonAsync<T>(JsonOptions(), token) ?? throw new InvalidOperationException("Server returned an empty response.");
+        using var request = new HttpRequestMessage(HttpMethod.Post, Server + path);
+        request.Headers.Add("X-Kivra-Bridge-Token", current.Token);
+        if (body is not null) request.Content = JsonContent.Create(body, options: JsonOptions());
+        return await http.SendAsync(request, token);
+    }
+    async Task PostCloudAsync(BridgeConfig current, string path, object body, CancellationToken token)
+    {
+        using var response = await SendCloudAsync(current, path, body, token);
+        response.EnsureSuccessStatusCode();
     }
     static JsonSerializerOptions JsonOptions() => new(JsonSerializerDefaults.Web) { WriteIndented = true };
 }
-
-sealed class SetupForm : Form
-{
-    readonly TextBox code = new() { MaxLength = 6, Dock = DockStyle.Fill };
-    readonly ComboBox printers = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
-    public string PairingCode => code.Text.Trim();
-    public string QueueName => printers.SelectedItem?.ToString() ?? "";
-    public SetupForm(IReadOnlyList<string> queues)
-    {
-        Text = "Set up KIVRA Print Bridge"; ClientSize = new Size(460, 245); FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false; StartPosition = FormStartPosition.CenterScreen;
-        foreach (var queue in queues) printers.Items.Add(queue);
-        var detected = queues.FirstOrDefault(x => x.Contains("TA220", StringComparison.OrdinalIgnoreCase)) ?? queues.FirstOrDefault(x => x.Contains("TSC", StringComparison.OrdinalIgnoreCase));
-        if (detected is not null) printers.SelectedItem = detected; else if (printers.Items.Count > 0) printers.SelectedIndex = 0;
-        var ok = new Button { Text = "Connect", AutoSize = true };
-        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, AutoSize = true };
-        ok.Click += (_, _) =>
-        {
-            if (PairingCode.Length != 6 || !PairingCode.All(char.IsDigit)) { MessageBox.Show("Enter the six-digit code shown in KIVRA Settings > Print Bridge."); return; }
-            if (QueueName.Length == 0) { MessageBox.Show("Connect and install the USB printer first."); return; }
-            DialogResult = DialogResult.OK;
-        };
-        AcceptButton = ok; CancelButton = cancel;
-        var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft }; buttons.Controls.Add(ok); buttons.Controls.Add(cancel);
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(18), ColumnCount = 1, RowCount = 6 };
-        layout.Controls.Add(new Label { Text = "Choose the USB label printer and enter the pairing code from KIVRA.", AutoSize = true });
-        layout.Controls.Add(new Label { Text = "Printer", AutoSize = true, Margin = new Padding(3, 14, 3, 3) }); layout.Controls.Add(printers);
-        layout.Controls.Add(new Label { Text = "Six-digit pairing code", AutoSize = true, Margin = new Padding(3, 14, 3, 3) }); layout.Controls.Add(code); layout.Controls.Add(buttons); Controls.Add(layout);
-    }
-}
-
 sealed class StatusForm : Form
 {
     readonly Label state = new() { AutoSize = true, Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold) };
@@ -296,13 +406,20 @@ sealed class StatusForm : Form
 }
 
 sealed record BridgeConfig(string Server, string Token, string QueueName, string DeviceName);
-sealed record PairResponse(Guid DeviceId, string DeviceName, string Token);
 sealed record BridgeJob(Guid JobId, string LabelCode, string ItemName, string PrinterName, string IpAddress, int TcpPort, string Payload, DateTimeOffset LeaseExpiresAt);
 
 static class WindowsPrinter
 {
     const int Local = 2, Connections = 4, InsufficientBuffer = 122;
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] struct PrinterInfo4 { public IntPtr PrinterName; public IntPtr ServerName; public uint Attributes; }
+    static readonly object driverSync = new();
+    static IReadOnlyDictionary<string, string> cachedDrivers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct PrinterInfo2
+    {
+        public IntPtr ServerName, PrinterName, ShareName, PortName, DriverName, Comment, Location;
+        public IntPtr DeviceMode, SeparatorFile, PrintProcessor, DataType, Parameters, SecurityDescriptor;
+        public uint Attributes, Priority, DefaultPriority, StartTime, UntilTime, Status, Jobs, AveragePagesPerMinute;
+    }
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] struct DocInfo { [MarshalAs(UnmanagedType.LPWStr)] public string DocumentName; [MarshalAs(UnmanagedType.LPWStr)] public string? OutputFile; [MarshalAs(UnmanagedType.LPWStr)] public string DataType; }
     [DllImport("winspool.drv", SetLastError = true, CharSet = CharSet.Unicode)] static extern bool EnumPrinters(int flags, string? name, int level, IntPtr buffer, int size, out int needed, out int returned);
     [DllImport("winspool.drv", SetLastError = true, CharSet = CharSet.Unicode)] static extern bool OpenPrinter(string name, out IntPtr handle, IntPtr defaults);
@@ -314,12 +431,34 @@ static class WindowsPrinter
     [DllImport("winspool.drv", SetLastError = true)] static extern bool WritePrinter(IntPtr handle, IntPtr bytes, int count, out int written);
     public static IReadOnlyList<string> GetQueues()
     {
-        EnumPrinters(Local | Connections, null, 4, IntPtr.Zero, 0, out var needed, out _); if (needed == 0) return [];
-        if (Marshal.GetLastWin32Error() != InsufficientBuffer) throw Error("enumerate printer queues");
+        // Level 2 includes the installed driver name, so a TSC printer renamed
+        // "Kitchen Printer" remains discoverable. This runs on the monitor's
+        // worker thread; HTTP requests consume only the cached metadata.
+        var initial = EnumPrinters(Local | Connections, null, 2, IntPtr.Zero, 0, out var needed, out _);
+        if (!initial && Marshal.GetLastWin32Error() != InsufficientBuffer) throw Error("enumerate printer queues");
+        if (needed == 0)
+        {
+            lock (driverSync) cachedDrivers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            return [];
+        }
         var buffer = Marshal.AllocHGlobal(needed);
-        try { if (!EnumPrinters(Local | Connections, null, 4, buffer, needed, out _, out var returned)) throw Error("enumerate printer queues"); var size = Marshal.SizeOf<PrinterInfo4>(); var result = new List<string>(returned); for (var i = 0; i < returned; i++) { var info = Marshal.PtrToStructure<PrinterInfo4>(IntPtr.Add(buffer, i * size)); var name = Marshal.PtrToStringUni(info.PrinterName); if (!string.IsNullOrWhiteSpace(name)) result.Add(name); } return result.OrderBy(x => x).ToList(); }
+        try
+        {
+            if (!EnumPrinters(Local | Connections, null, 2, buffer, needed, out _, out var returned)) throw Error("enumerate printer queues");
+            var size = Marshal.SizeOf<PrinterInfo2>();
+            var drivers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < returned; i++)
+            {
+                var info = Marshal.PtrToStructure<PrinterInfo2>(IntPtr.Add(buffer, i * size));
+                var name = Marshal.PtrToStringUni(info.PrinterName);
+                if (!string.IsNullOrWhiteSpace(name)) drivers[name] = Marshal.PtrToStringUni(info.DriverName) ?? "";
+            }
+            lock (driverSync) cachedDrivers = drivers;
+            return drivers.Keys.OrderBy(name => name).ToArray();
+        }
         finally { Marshal.FreeHGlobal(buffer); }
     }
+    public static IReadOnlyDictionary<string, string> GetCachedDriverNames() { lock (driverSync) return cachedDrivers; }
     public static string? Send(string queue, byte[] payload)
     {
         if (!OpenPrinter(queue, out var handle, IntPtr.Zero)) return Error("open printer").Message;

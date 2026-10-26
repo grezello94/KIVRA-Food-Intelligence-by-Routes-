@@ -94,11 +94,11 @@ test('photo downloads follow core caching, stay bounded, and cannot break instal
 
 test('a failed core download rejects installation without deleting the previous release',async()=>{
  const worker=serviceWorker();
- worker.cached('/index.html','working shell','kivra-shell-v78');
+ worker.cached('/index.html','working shell','kivra-shell-v79');
  worker.context.failCore=true;
  await assert.rejects(worker.lifecycle('install'),/Missing core asset/);
  assert.equal(worker.network.length,0);
- assert.ok(worker.stores.has('kivra-shell-v78'));
+ assert.ok(worker.stores.has('kivra-shell-v79'));
  assert.equal(worker.context.skipped,undefined);
 });
 
@@ -143,7 +143,7 @@ test('authentication, API, reports, downloads and other origins bypass the shell
  for(const [path,options] of [
   ['/api/bootstrap',{}],['/api/auth/pin',{}],['/api/reports/labels.csv',{mode:'navigate'}],
   ['/healthz',{mode:'navigate'}],['/downloads/KIVRA-Windows-Print-Bridge.zip',{}],
-  ['/private-photo.webp',{}],['/unlisted.js?v=79',{}],['/app.js?v=78',{}],
+  ['/private-photo.webp',{}],['/unlisted.js?v=80',{}],['/app.js?v=79',{}],
   ['https://images.example.test/photo.webp',{}],
   ['/index.html',{headers:new Headers({Authorization:'Bearer private'})}],
   ['/index.html',{method:'POST',mode:'navigate'}]
@@ -153,10 +153,10 @@ test('authentication, API, reports, downloads and other origins bypass the shell
 test('activation removes only obsolete KIVRA shell caches and claims clients',async()=>{
  const worker=serviceWorker();
  worker.cached('/index.html','new');
- worker.cached('/index.html','old','kivra-shell-v78');
+ worker.cached('/index.html','old','kivra-shell-v79');
  worker.cached('/data','private','other-app-cache');
  await worker.lifecycle('activate');
- assert.deepEqual(worker.deleted,['kivra-shell-v78']);
+ assert.deepEqual(worker.deleted,['kivra-shell-v79']);
  assert.ok(worker.stores.has(worker.current));
  assert.ok(worker.stores.has('other-app-cache'));
  assert.equal(worker.context.claimed,true);

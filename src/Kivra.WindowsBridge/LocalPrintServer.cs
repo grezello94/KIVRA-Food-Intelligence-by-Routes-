@@ -6,37 +6,57 @@ using System.Text.Json;
 
 namespace Kivra.WindowsBridge;
 
+internal sealed record LocalPrinterQueue(string QueueName, bool Compatible, bool Ready, string? Detail = null, string? DriverName = null);
+internal sealed record LocalPrinterSnapshot(string QueueName, bool PrinterAvailable, IReadOnlyList<LocalPrinterQueue> InstalledQueues, string? Detail = null);
+internal sealed record LocalCloudRegistration(string Server, string Token, string DeviceName);
+
 // TcpListener needs no machine-wide HTTP URL reservation or administrator setup.
-// It listens only on loopback and accepts only the paired website's exact Origin.
+// It listens only on loopback and accepts only the configured website's exact Origin.
 internal sealed class LocalPrintServer : IDisposable
 {
     const int HeaderLimit = 16 * 1024, BodyLimit = 64 * 1024;
     readonly TcpListener listener;
     readonly string origin;
     readonly string localToken;
-    readonly Func<string> queueName;
     readonly string deviceName;
     readonly string version;
     readonly OfflinePrintEngine engine;
     readonly Action<string> log;
+    readonly Func<LocalPrinterSnapshot> getPrinterSnapshot;
+    readonly Func<string, CancellationToken, Task>? selectPrinter;
+    readonly Func<LocalCloudRegistration, CancellationToken, Task>? registerCloud;
     readonly SemaphoreSlim connections = new(16, 16);
 
     internal LocalPrintServer(string server, string dataDirectory, Func<string> queueName,
-        string deviceName, string version, OfflinePrintEngine engine, Action<string> log, int port = 17847)
+        string deviceName, string version, OfflinePrintEngine engine, Action<string> log, int port = 17847,
+        Func<LocalPrinterSnapshot>? getPrinterSnapshot = null,
+        Func<string, CancellationToken, Task>? selectPrinter = null,
+        Func<LocalCloudRegistration, CancellationToken, Task>? registerCloud = null)
     {
         var serverUri = new Uri(server, UriKind.Absolute);
         if (serverUri.Scheme is not ("http" or "https")) throw new ArgumentException("The bridge website must use HTTP or HTTPS.");
         origin = serverUri.GetLeftPart(UriPartial.Authority);
         Directory.CreateDirectory(dataDirectory);
         var tokenPath = Path.Combine(dataDirectory, "local-print-token");
-        if (!File.Exists(tokenPath)) OfflinePrintEngine.WriteDurable(tokenPath, Convert.ToHexString(RandomNumberGenerator.GetBytes(32)));
-        localToken = File.ReadAllText(tokenPath).Trim();
-        if (localToken.Length != 64 || !localToken.All(Uri.IsHexDigit)) throw new IOException("The local printer access token is damaged. Restore local-print-token or pair the bridge again.");
-        this.queueName = queueName;
+        var savedToken = File.Exists(tokenPath) ? File.ReadAllText(tokenPath).Trim() : "";
+        if (savedToken.Length != 64 || !savedToken.All(Uri.IsHexDigit))
+        {
+            savedToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+            OfflinePrintEngine.WriteDurable(tokenPath, savedToken);
+        }
+        localToken = savedToken;
         this.deviceName = deviceName;
         this.version = version;
         this.engine = engine;
         this.log = log;
+        this.getPrinterSnapshot = getPrinterSnapshot ?? (() =>
+        {
+            var selected = queueName();
+            return new(selected, !string.IsNullOrWhiteSpace(selected),
+                string.IsNullOrWhiteSpace(selected) ? [] : [new(selected, true, true)]);
+        });
+        this.selectPrinter = selectPrinter;
+        this.registerCloud = registerCloud;
         listener = new TcpListener(IPAddress.Loopback, port);
     }
 
@@ -73,7 +93,7 @@ internal sealed class LocalPrintServer : IDisposable
                 reading.CancelAfter(TimeSpan.FromSeconds(10));
                 var request = await ReadRequestAsync(stream, reading.Token);
                 var cors = request.Headers.TryGetValue("Origin", out var suppliedOrigin) && suppliedOrigin == origin;
-                if (!cors) { await ReplyAsync(stream, 403, new { detail = "This website is not paired with the local print bridge." }, false, stopping); return; }
+                if (!cors) { await ReplyAsync(stream, 403, new { detail = "This website is not allowed to access the local print bridge." }, false, stopping); return; }
                 allowOrigin = true;
                 if (!request.Headers.TryGetValue("Host", out var host) || host != $"127.0.0.1:{Port}")
                 { await ReplyAsync(stream, 403, new { detail = "Use the loopback bridge address." }, true, stopping); return; }
@@ -89,21 +109,89 @@ internal sealed class LocalPrintServer : IDisposable
                 }
                 if (request.Method == "GET" && request.Path == "/v1/session")
                 {
-                    await ReplyAsync(stream, 200, new { token = localToken, version, queueName = queueName(), deviceName }, true, stopping);
+                    var snapshot = getPrinterSnapshot();
+                    await ReplyAsync(stream, 200, new
+                    {
+                        token = localToken, version, queueName = snapshot.QueueName, deviceName,
+                        ready = snapshot.PrinterAvailable, printers = PrinterChoices(snapshot),
+                        needsSelection = NeedsSelection(snapshot), detail = snapshot.Detail,
+                        capabilities = new[] { "connection-test", "test-print" }
+                            .Concat(selectPrinter is null ? [] : new[] { "printer-selection" })
+                            .Concat(registerCloud is null ? [] : new[] { "cloud-registration" }).ToArray()
+                    }, true, stopping);
                     return;
                 }
                 if (!HasToken(request.Headers.GetValueOrDefault("X-Kivra-Local-Token")))
                 { await ReplyAsync(stream, 401, new { detail = "Connect to the local print bridge again." }, true, stopping); return; }
-                if (request.Method == "POST" && request.Path == "/v1/print")
+                if (request.Method == "GET" && request.Path is "/v1/printer" or "/v1/connection-test")
+                {
+                    await ReplyAsync(stream, 200, PrinterStatus(), true, stopping);
+                    return;
+                }
+                if (request.Method == "POST" && request.Path is "/v1/print" or "/v1/test-print" or "/v1/printer" or "/v1/cloud")
                 {
                     if (!request.Headers.GetValueOrDefault("Content-Type", "").Split(';')[0].Trim().Equals("application/json", StringComparison.OrdinalIgnoreCase))
                     { await ReplyAsync(stream, 415, new { detail = "Send a JSON print request." }, true, stopping); return; }
+                }
+                if (request.Method == "POST" && request.Path == "/v1/printer")
+                {
+                    if (selectPrinter is null) throw new ArgumentException("Update the local print bridge to select a Windows printer from the app.");
+                    var selection = JsonSerializer.Deserialize<PrinterSelection>(request.Body, OfflinePrintEngine.JsonOptions)
+                        ?? throw new ArgumentException("Select an installed TSC printer.");
+                    if (string.IsNullOrWhiteSpace(selection.QueueName) || selection.QueueName.Length > 256 || selection.QueueName.Any(char.IsControl))
+                        throw new ArgumentException("Select an installed TSC printer.");
+                    var installed = getPrinterSnapshot().InstalledQueues.FirstOrDefault(queue =>
+                        queue.QueueName.Equals(selection.QueueName, StringComparison.OrdinalIgnoreCase));
+                    if (installed is null || !installed.Compatible) throw new ArgumentException("Select an installed compatible TSC printer from this PC.");
+                    // The callback rechecks the installed queue under the shared
+                    // spool gate and persists it before acknowledging selection.
+                    await selectPrinter(installed.QueueName, stopping);
+                    await ReplyAsync(stream, 200, PrinterStatus(), true, stopping);
+                    return;
+                }
+                if (request.Method == "POST" && request.Path == "/v1/cloud")
+                {
+                    if (registerCloud is null) throw new ArgumentException("Update the local print bridge to enable printing from other devices in the app.");
+                    var registration = JsonSerializer.Deserialize<LocalCloudRegistration>(request.Body, OfflinePrintEngine.JsonOptions)
+                        ?? throw new ArgumentException("A printing connection is required.");
+                    if (!Uri.TryCreate(registration.Server, UriKind.Absolute, out var registeredServer) ||
+                        registeredServer.Scheme is not ("http" or "https") || registeredServer.GetLeftPart(UriPartial.Authority) != origin ||
+                        registeredServer.UserInfo.Length != 0 || registeredServer.AbsolutePath != "/" || registeredServer.Query.Length != 0 || registeredServer.Fragment.Length != 0)
+                        throw new ArgumentException("Enable printing only for this bridge's configured website.");
+                    if (string.IsNullOrWhiteSpace(registration.Token) || registration.Token.Length > 8192 || registration.Token.Any(char.IsWhiteSpace) || registration.Token.Any(char.IsControl) ||
+                        string.IsNullOrWhiteSpace(registration.DeviceName) || registration.DeviceName.Length > 100 || registration.DeviceName.Any(char.IsControl))
+                        throw new ArgumentException("A valid printing connection and device name are required.");
+                    await registerCloud(registration, stopping);
+                    await ReplyAsync(stream, 200, new { success = true }, true, stopping);
+                    return;
+                }
+                if (request.Method == "POST" && request.Path == "/v1/print")
+                {
                     var print = JsonSerializer.Deserialize<OfflinePrintRequest>(request.Body, OfflinePrintEngine.JsonOptions)
                         ?? throw new ArgumentException("A print request is required.");
+                    var expectedQueue = ExpectedQueueName(request.Body);
+                    if (await engine.GetAsync(print.IdempotencyKey, stopping) is null) RequireReadyPrinter();
                     // A browser timeout/disconnect does not cancel an accepted
                     // spool operation. The durable key can recover its receipt.
-                    var result = await engine.PrintAsync(print, stopping);
+                    var result = await engine.PrintAsync(print, stopping, expectedQueue);
                     await ReplyAsync(stream, 200, result, true, stopping);
+                    return;
+                }
+                if (request.Method == "POST" && request.Path == "/v1/test-print")
+                {
+                    var print = JsonSerializer.Deserialize<LocalTestPrintRequest>(request.Body, OfflinePrintEngine.JsonOptions)
+                        ?? throw new ArgumentException("A test print request is required.");
+                    var expectedQueue = ExpectedQueueName(request.Body);
+                    if (await engine.GetTestAsync(print.IdempotencyKey, stopping) is null) RequireReadyPrinter();
+                    var result = await engine.TestPrintAsync(print, stopping, expectedQueue);
+                    await ReplyAsync(stream, 200, result, true, stopping);
+                    return;
+                }
+                if (request.Method == "GET" && request.Path.StartsWith("/v1/test-prints/", StringComparison.Ordinal))
+                {
+                    var key = Uri.UnescapeDataString(request.Path[16..]);
+                    var result = await engine.GetTestAsync(key, stopping);
+                    await ReplyAsync(stream, result is null ? 404 : 200, result is null ? (object)new { detail = "No saved local test print has this key." } : result, true, stopping);
                     return;
                 }
                 if (request.Method == "GET" && request.Path.StartsWith("/v1/jobs/", StringComparison.Ordinal))
@@ -133,6 +221,48 @@ internal sealed class LocalPrintServer : IDisposable
 
     bool HasToken(string? token) => token is not null && CryptographicOperations.FixedTimeEquals(
         SHA256.HashData(Encoding.UTF8.GetBytes(token)), SHA256.HashData(Encoding.UTF8.GetBytes(localToken)));
+
+    object PrinterStatus()
+    {
+        var snapshot = getPrinterSnapshot();
+        return new { queueName = snapshot.QueueName, ready = snapshot.PrinterAvailable,
+            printers = PrinterChoices(snapshot), needsSelection = NeedsSelection(snapshot), detail = snapshot.Detail };
+    }
+
+    static object[] PrinterChoices(LocalPrinterSnapshot snapshot) => snapshot.InstalledQueues.Select(queue =>
+        (object)new { name = queue.QueueName, compatible = queue.Compatible, ready = queue.Ready, detail = queue.Detail, driverName = queue.DriverName }).ToArray();
+    static bool NeedsSelection(LocalPrinterSnapshot snapshot) => !snapshot.PrinterAvailable && snapshot.InstalledQueues.Count(queue => queue.Compatible) > 1;
+
+    string ExpectedQueueName(byte[] body)
+    {
+        // Queue binding is transport metadata, deliberately excluded from the
+        // durable request model/hash so receipts from previous versions recover.
+        using var document = JsonDocument.Parse(body);
+        var printer = document.RootElement.EnumerateObject().LastOrDefault(property => property.Name.Equals("printer", StringComparison.OrdinalIgnoreCase)).Value;
+        if (printer.ValueKind == JsonValueKind.Object)
+        {
+            var queue = printer.EnumerateObject().LastOrDefault(property => property.Name.Equals("usbQueueName", StringComparison.OrdinalIgnoreCase)).Value;
+            if (queue.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null))
+            {
+                if (queue.ValueKind != JsonValueKind.String) throw new ArgumentException("The selected USB printer name must be a string.");
+                var name = queue.GetString();
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    if (name.Length > 256 || name.Any(char.IsControl)) throw new ArgumentException("Select a valid USB printer in KIVRA printer settings.");
+                    return name;
+                }
+            }
+        }
+        return getPrinterSnapshot().QueueName;
+    }
+
+    void RequireReadyPrinter()
+    {
+        var snapshot = getPrinterSnapshot();
+        if (!snapshot.PrinterAvailable || !snapshot.InstalledQueues.Any(queue => queue.Compatible &&
+            queue.QueueName.Equals(snapshot.QueueName, StringComparison.OrdinalIgnoreCase)))
+            throw new LocalPrintConflictException(snapshot.Detail ?? "Connect or select an installed compatible TSC printer in the app before printing.");
+    }
 
     async Task ReplyAsync(Stream stream, int status, object? body, bool allowOrigin, CancellationToken token, bool preflight = false)
     {
@@ -176,5 +306,6 @@ internal sealed class LocalPrintServer : IDisposable
     }
 
     public void Dispose() => listener.Stop();
+    sealed record PrinterSelection(string QueueName);
     sealed record LocalRequest(string Method, string Path, Dictionary<string, string> Headers, byte[] Body);
 }

@@ -29,7 +29,7 @@ Copy `.env.example` to `.env`, replace every placeholder with deployment-specifi
 - Network printing uses raw TSPL over TCP, normally port `9100`. **Scan LAN** checks the API server interfaces, the connecting user's private `/24`, and `PRINTER_DISCOVERY_NETWORKS`. For Docker Desktop, set this variable to the restaurant LAN, for example `192.168.1.0/24`, because the container normally sees only its virtual network. Reserve the selected printer IP in DHCP.
 - USB printing is server-side, not browser-side. The TSC must be installed as a RAW Windows printer queue when KIVRA runs natively on Windows, or as a CUPS raw queue when KIVRA runs on Linux/macOS. A Docker container cannot see host USB queues unless CUPS is installed in the image and the host CUPS service/socket is explicitly exposed to it. For a directly attached USB printer, running KIVRA natively on the printer host is the supported default.
 - A successful TCP connection or visible USB queue only proves transport availability. Always run **Test Print** with the exact installed roll and confirm alignment before operational printing.
-- When KIVRA is hosted on Coolify but the printer remains connected to a Windows PC by USB, run `KIVRA Windows Print Bridge.exe` on that PC once and pair it from **More > Print Bridge**. The bridge installs itself under the current user's local application data, starts silently in the Windows notification area at every sign-in, remembers the selected queue, and waits for the Windows spooler/USB printer during boot. Double-click its tray icon to see connection status or open its log. Hosted USB jobs are then claimed securely and written to the local RAW queue; Visual Studio is not required.
+- When KIVRA is hosted on Coolify and the printer is connected to a Windows PC by USB, install KIVRA Windows Print Bridge once. Version 1.8.0 starts the local service without any cloud credentials or code-entry dialog, finds installed TSC printer drivers (including renamed queues), and starts automatically at Windows sign-in. The app detects and uses the local printer; browser local-device permission may be required once. Local printing does not depend on shared-print pairing or server connectivity.
 
 ### Windows bridge 1.6.0 performance update
 
@@ -39,15 +39,21 @@ Version 1.6.0 validates the queue once at startup, discovers printers in the bac
 
 Validate changes with `dotnet test tests/Kivra.Tests/Kivra.Tests.csproj` and `node --test tests/Kivra.Web.Tests/performance.test.cjs`. Timing checks use local test data and a fake printer; confirm physical output on the kitchen printer after installing the update.
 
-## Offline operation and Windows USB printing (1.7.0)
+### Windows USB plug and play (1.8.0)
+
+Open **Settings > Printer Setup** to see the installed printer and test it. A single compatible installed TSC queue is selected automatically; choose a printer in the app when several are installed. All local Test Print, normal labels and reprints use the same direct USB path. If a response is interrupted, durable receipts recover the result without printing a second copy.
+
+**Print from other devices** is optional. On the printer PC, choose **Enable or reconnect shared printing**; KIVRA exchanges the credentials inside the app without displaying a code. On a second Windows PC, choose **Use a printer on another computer**. Rejected shared credentials pause only shared jobs; local USB printing stays available. Existing pending requests keep their original transport and identifiers.
+
+## Offline operation and Windows USB printing (1.8.0)
 
 Deploy the updated API and web assets together. Startup applies the new `202610180007_AddOfflineMutationReceipts` database migration. Close all existing KIVRA windows and reopen after deployment so the new offline shell can activate without replacing an open print form.
 
 On the Windows PC connected to the TSC USB printer:
 
-1. Exit the old bridge from its notification-area menu. Extract the updated `wwwroot/downloads/KIVRA-Windows-Print-Bridge.zip` and launch `KIVRA Windows Print Bridge.exe`. The standalone 1.7.0 build retains existing pairing, queue selection and automatic startup.
-2. Sign in to KIVRA while online. Use **Settings > Printer Setup** to configure the printer with the **TSC TSPL USB** driver and its Windows RAW queue.
-3. Open **Settings > Offline & sync**, select that printer, and choose **Connect this PC**. Allow the browser's local network access request. The bridge accepts requests only from its paired website, on `127.0.0.1:17847`, using an installation-specific token. Current Chrome/Edge may request [local network access permission](https://developer.chrome.com/blog/local-network-access).
+1. Exit the old bridge from its notification-area menu. Extract the updated `wwwroot/downloads/KIVRA-Windows-Print-Bridge.zip` and launch `KIVRA Windows Print Bridge.exe`. The standalone 1.8.0 build retains existing pairing, queue selection and automatic startup.
+2. Sign in to KIVRA while online. KIVRA detects an installed supported TSC Windows driver and matches its USB printer configuration automatically. An administrator signing in with no physical printer configured gets a default 50 × 30 mm configuration; adjust label size and stock in **Label size & printer settings** if needed.
+3. Open **Settings > Printer Setup** to check the detected printer. Allow the browser's local device access request. No pairing code is needed for this PC. The bridge accepts requests only from its paired website, on `127.0.0.1:17847`, using an installation-specific token. Current Chrome/Edge may request [local network access permission](https://developer.chrome.com/blog/local-network-access).
 4. Keep the bridge running. New labels and existing-label reprints now go directly to the configured USB queue, including while the hosted server is unreachable. Reprints retain the original preparation time, expiry and shelf-life snapshot.
 
 The application shell, local food photos and signed-in account's kitchen data are cached on the PC. IndexedDB stores pending changes before sending or printing. Item/category/printer/storage edits and consumed/discarded statuses remain usable offline and replay in order. Locally printed labels sync their recorded snapshots into server history **without printing another copy**. API replay receipts and durable receipts on the printer PC protect against retries, lost responses and restarts. A request whose physical print result is uncertain stops additional copies and remains available for review in **Offline & sync**.

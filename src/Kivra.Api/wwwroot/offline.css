@@ -13,6 +13,7 @@
 .offline-status.syncing .connection-indicator{background:#5480b8;animation:sync-pulse 1.4s ease-in-out infinite}
 .sync-page{padding-bottom:90px}.sync-page .settings-card{margin-bottom:18px}.sync-page p{line-height:1.6}.sync-page .panel-actions{flex-wrap:wrap;gap:10px}.sync-state{font-weight:600}
 .pending-operation{display:flex;justify-content:space-between;align-items:start;gap:16px;padding:16px 0;border-top:1px solid #e6e9e3}.pending-operation small{display:block;margin-top:4px;color:#758072}.pending-operation p{font-size:13px;color:#8f3d29;overflow-wrap:anywhere}.pending-operation .btn{flex-shrink:0;font-size:12px}
+.printer-recovery{margin-top:18px;padding:14px;border:1px solid #edcf88;border-radius:12px;background:#fff8e7;color:#70521b}.printer-recovery p{margin:0 0 12px;line-height:1.5;overflow-wrap:anywhere}.printer-recovery .panel-actions{flex-wrap:wrap}
 @keyframes sync-pulse{50%{opacity:.35}}
 @media(max-width:759px){.offline-status{left:12px;right:12px;bottom:calc(76px + env(safe-area-inset-bottom));max-width:none;padding:8px 11px;font-size:11px}.offline-status button{margin-left:auto}.pending-operation{flex-direction:column}.screen{padding-bottom:145px!important}}
 @media(prefers-reduced-motion:reduce){.offline-status.syncing .connection-indicator{animation:none}}

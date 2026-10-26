@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>KIVRA Windows Print Bridge</AssemblyName>
-    <Version>1.7.0</Version>
+    <Version>1.8.0</Version>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Kivra.Application/Kivra.Application.csproj" />

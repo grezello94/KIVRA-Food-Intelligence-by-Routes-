@@ -42,15 +42,17 @@ function snapshot() {
 }
 
 function application(options = {}) {
- const store = options.store || memoryStore(), events = store.events;
+ const store = options.store || memoryStore(), events = store.events, localTests = options.localTests || new Map();
  const context = vm.createContext({setTimeout, clearTimeout, AbortController, fetch: async () => { throw Error('Unexpected bridge request'); }});
  vm.runInContext(source, context);
  let session = {token: 'token-a', user: {id: 'chef-a', role: 'Administrator'}}, data = options.snapshot || snapshot(), hasSnapshot = options.hasSnapshot !== false, counter = 0;
+ let localPrinterId = typeof options.localPrinter === 'string' ? options.localPrinter : options.localPrinter ? 'printer-1' : null;
  let network = options.network || (async (path, request) => clone(request.body ? JSON.parse(request.body) : {}));
  const fixture = {
-  store, events, networkCalls: [], statuses: [], synced: 0,
+  store, events, localTests, networkCalls: [], statuses: [], synced: 0,
   get data() { return data; },
   get session() { return session; },
+  get localPrinterId() { return localPrinterId; },
   setNetwork(callback) { network = callback; },
   switchAccount(userId = 'chef-b', replacement = snapshot()) { session = {token: `token-${userId}`, user: {id: userId, role: 'Administrator'}}; data = replacement; },
   setRole(role) { session.user.role = role; }
@@ -68,7 +70,15 @@ function application(options = {}) {
    return network(path, request);
   },
   newId: () => `generated-${++counter}`,
-  localPrinterId: () => options.localPrinter ? 'printer-1' : null,
+  autoLocal: options.autoLocal === true,
+  requireLocal: options.requireLocal === true,
+  localPrinterId: () => localPrinterId,
+  onLocalPrinter: (printerId, bridgeSession) => { localPrinterId = printerId; options.onLocalPrinter?.(printerId, bridgeSession); },
+  loadLocalTest: printerId => clone(localTests.get(`${session.user.id}:${printerId}`)),
+  saveLocalTest: (printerId, body) => {
+   const key = `${session.user.id}:${printerId}`;
+   if (body) localTests.set(key, clone(body)); else localTests.delete(key);
+  },
   previewExpiry: () => '2026-10-20T10:00:00.000Z',
   onStatus: status => fixture.statuses.push(clone(status)),
   onSynced: async () => { fixture.synced++; }
@@ -583,4 +593,343 @@ test('discarding a label status change restores both history and the expiry moni
  assert.equal(fixture.data.expiry[0].id, original.id);
  assert.equal(fixture.data.expiry[0].currentStatus, 'Active');
  assert.equal((await fixture.store.readBootstrap('chef-a')).expiry[0].currentStatus, 'Active');
+});
+
+function detectedUsbSession(overrides = {}) {
+ return {
+  token: 'local-bridge-token', queueName: 'TSC TA220', ready: true,
+  printers: [{name: 'TSC TA220', compatible: true, ready: true}],
+  capabilities: ['connection-test', 'test-print', 'printer-selection', 'cloud-registration'],
+  ...overrides
+ };
+}
+
+test('an automatically detected USB printer prints without cloud pairing or valid cloud bridge credentials', async () => {
+ const data = snapshot();
+ data.printers[0].usbQueueName = 'tsc ta220';
+ const fixture = application({snapshot: data, autoLocal: true, network: async () => { throw Object.assign(Error('Unpaired cloud bridge'), {status: 401}); }});
+ const localCalls = [];
+ fixture.client.localFetch = async (path, options = {}) => {
+  localCalls.push({path, options});
+  if (path === '/v1/session') return detectedUsbSession();
+  assert.equal(path, '/v1/print');
+  return receipt();
+ };
+
+ const result = await fixture.client.request('/api/labels/print', write(printBody()));
+
+ assert.equal(result.locallyPrinted, true);
+ assert.equal(result.status, 'Printed');
+ assert.equal(fixture.localPrinterId, 'printer-1');
+ assert.deepEqual(localCalls.map(call => call.path), ['/v1/session', '/v1/print']);
+ assert.equal(fixture.networkCalls.length, 0);
+ const saved = await fixture.store.listOperations('chef-a');
+ assert.equal(saved.length, 1);
+ assert.equal(saved[0].path, '/api/labels/offline-import');
+ assert.equal(JSON.parse(saved[0].body).printerId, 'printer-1');
+});
+
+test('automatic local discovery also preserves the original snapshot for a reprint', async () => {
+ const data = snapshot(), original = historicalLabel();
+ data.labels = [clone(original)];
+ data.items[0].shelfLifeValue = 999;
+ const fixture = application({snapshot: data, autoLocal: true});
+ let localRequest;
+ fixture.client.localFetch = async (path, options = {}) => {
+  if (path === '/v1/session') return detectedUsbSession();
+  localRequest = JSON.parse(options.body);
+  return receipt();
+ };
+
+ const result = await fixture.client.request('/api/labels/original-label/reprint', write({}));
+
+ assert.equal(result.locallyPrinted, true);
+ assert.equal(localRequest.isReprint, true);
+ assert.equal(localRequest.labelId, original.id);
+ assert.equal(localRequest.labelCode, original.labelCode);
+ assert.equal(localRequest.shelfLifeValue, 4);
+ assert.equal(localRequest.shelfLifeUnit, 'Hours');
+ assert.equal(localRequest.operationalDateTime, original.operationalDateTime);
+ assert.equal(localRequest.expiryDateTime, original.expiryDateTime);
+ assert.equal(fixture.networkCalls.length, 0);
+});
+
+test('a discovery failure before local dispatch may use the configured cloud print route', async () => {
+ const fixture = application({autoLocal: true, network: async () => ({status: 'Queued', labelId: 'server-label'})});
+ const localCalls = [];
+ fixture.client.localFetch = async path => { localCalls.push(path); throw disconnected(); };
+
+ const result = await fixture.client.request('/api/labels/print', write(printBody()));
+
+ assert.equal(result.status, 'Queued');
+ assert.deepEqual(localCalls, ['/v1/session']);
+ assert.equal(fixture.networkCalls.length, 1);
+ assert.equal(fixture.networkCalls[0].path, '/api/labels/print');
+ assert.equal((await fixture.store.listOperations('chef-a')).length, 0);
+});
+
+test('an already bound USB printer stays on its local route when discovery is unavailable', async () => {
+ const fixture = application({autoLocal: true, localPrinter: true});
+ fixture.client.localFetch = async () => { throw disconnected(); };
+
+ const result = await fixture.client.request('/api/labels/print', write(printBody()));
+
+ assert.equal(result.status, 'OfflinePending');
+ assert.equal(result.requiresReview, true);
+ assert.equal(fixture.networkCalls.length, 0);
+ const saved = await fixture.store.listOperations('chef-a');
+ assert.equal(saved.length, 1);
+ assert.equal(saved[0].type, 'local-print');
+});
+
+test('an ambiguous automatic local print never falls back to cloud printing and reuses its saved request', async () => {
+ const fixture = application({autoLocal: true, network: async () => { throw Object.assign(Error('Cloud authentication expired'), {status: 401}); }});
+ const requests = [];
+ fixture.client.localFetch = async (path, options = {}) => {
+  if (path === '/v1/session') return detectedUsbSession();
+  assert.equal(path, '/v1/print');
+  requests.push(options.body);
+  if (requests.length === 1) throw disconnected();
+  return receipt();
+ };
+
+ const result = await fixture.client.request('/api/labels/print', write(printBody()));
+ assert.equal(result.requiresReview, true);
+ assert.equal(fixture.networkCalls.length, 0);
+ const original = (await fixture.store.listOperations('chef-a'))[0];
+ assert.equal(original.type, 'local-print');
+
+ await fixture.client.sync();
+ assert.equal(requests.length, 2);
+ assert.equal(requests[1], requests[0], 'retry must use the identical durable key and label snapshot');
+ assert.equal(JSON.parse(requests[1]).idempotencyKey, original.id);
+ assert.deepEqual(fixture.networkCalls.map(call => call.path), ['/api/labels/offline-import']);
+ assert.equal((await fixture.store.listOperations('chef-a'))[0].path, '/api/labels/offline-import');
+
+ await fixture.client.sync();
+ assert.equal(requests.length, 2, 'a physical receipt must retry history import only');
+ assert.ok(fixture.networkCalls.every(call => call.path === '/api/labels/offline-import'));
+});
+
+for (const driver of ['EpsonEscPosUsb', 'TscTsplNetwork', 'AndroidBridge', 'Fake']) {
+ test(`automatic discovery does not route a ${driver} configuration through TSC USB`, async () => {
+  const data = snapshot();
+  data.printers[0].driver = driver;
+  const fixture = application({snapshot: data, autoLocal: true, localPrinter: true, network: async () => ({status: 'Queued'})});
+  fixture.client.localFetch = async () => assert.fail('unsupported printer configurations must not reach the TSPL bridge');
+
+  const result = await fixture.client.request('/api/labels/print', write(printBody()));
+
+  assert.equal(result.status, 'Queued');
+  assert.equal(fixture.networkCalls.length, 1);
+  assert.equal(fixture.networkCalls[0].path, '/api/labels/print');
+ });
+}
+
+test('automatic discovery respects a different configured USB queue', async () => {
+ const data = snapshot();
+ data.printers[0].usbQueueName = 'Other kitchen TSC';
+ const fixture = application({snapshot: data, autoLocal: true, network: async () => ({status: 'Queued'})});
+ const paths = [];
+ fixture.client.localFetch = async path => { paths.push(path); return detectedUsbSession(); };
+
+ const result = await fixture.client.request('/api/labels/print', write(printBody()));
+
+ assert.equal(result.status, 'Queued');
+ assert.deepEqual(paths, ['/v1/session']);
+ assert.equal(fixture.localPrinterId, null);
+ assert.equal(fixture.networkCalls[0].path, '/api/labels/print');
+});
+
+test('automatic discovery binds a current printer ID without rewriting saved work from an older database', async () => {
+ const fixture = application({autoLocal: true, localPrinter: 'deleted-printer'});
+ const oldRequest = {...fixture.client.printSnapshot(printBody(), 'old-key'), printerId: 'deleted-printer'};
+ const oldOperation = {id: 'old-key', path: '/api/labels/print', method: 'POST', body: JSON.stringify({...printBody(), printerId: 'deleted-printer', idempotencyKey: 'old-key'}), createdAt: '2026-10-18T09:00:00Z', status: 'blocked', type: 'local-print', localRequest: oldRequest};
+ await fixture.store.putOperation('chef-a', oldOperation);
+ fixture.client.localFetch = async path => path === '/v1/session' ? detectedUsbSession() : receipt();
+
+ const result = await fixture.client.request('/api/labels/print', write(printBody()));
+
+ assert.equal(result.locallyPrinted, true);
+ assert.equal(fixture.localPrinterId, 'printer-1');
+ const operations = await fixture.store.listOperations('chef-a');
+ assert.deepEqual(operations.find(operation => operation.id === 'old-key'), clone(oldOperation));
+ const current = operations.find(operation => operation.id !== 'old-key');
+ assert.equal(current.path, '/api/labels/offline-import');
+ assert.equal(JSON.parse(current.body).printerId, 'printer-1');
+});
+
+test('switching accounts during automatic discovery cannot bind or dispatch the earlier account print', {timeout: 5000}, async () => {
+ const fixture = application({autoLocal: true}), entered = deferred(), gate = deferred();
+ fixture.client.localFetch = async path => {
+  assert.equal(path, '/v1/session');
+  entered.resolve();
+  return gate.promise;
+ };
+
+ const pending = fixture.client.request('/api/labels/print', write(printBody())).catch(error => error);
+ await entered.promise;
+ fixture.switchAccount('chef-b', {...snapshot(), labels: [{id: 'b-only'}]});
+ gate.resolve(detectedUsbSession());
+ const error = await pending;
+
+ assert.match(error.message, /account changed/);
+ assert.equal(fixture.localPrinterId, null);
+ assert.equal(fixture.networkCalls.length, 0);
+ assert.equal((await fixture.store.listOperations('chef-b')).length, 0);
+ assert.deepEqual(fixture.data.labels.map(label => label.id), ['b-only']);
+});
+
+test('a timed out local test retains its test key until resolved without creating kitchen history or cloud requests', async () => {
+ const fixture = application({autoLocal: true});
+ const requests = [];
+ fixture.client.localFetch = async (path, options = {}) => {
+  if (path === '/v1/session') return detectedUsbSession();
+  assert.equal(path, '/v1/test-print');
+  const body = JSON.parse(options.body);
+  requests.push(body);
+  if (requests.length === 1) throw disconnected();
+  return {idempotencyKey: body.idempotencyKey, printJobId: 'test-job', status: 'Printed', idempotent: requests.length === 2};
+ };
+
+ await assert.rejects(fixture.client.testLocal(fixture.data.printers[0]), /interrupted.*physical label/);
+ await fixture.client.testLocal(fixture.data.printers[0]);
+ assert.equal(requests[1].idempotencyKey, requests[0].idempotencyKey);
+ assert.deepEqual(requests[1], requests[0]);
+ await fixture.client.testLocal(fixture.data.printers[0]);
+ assert.notEqual(requests[2].idempotencyKey, requests[1].idempotencyKey);
+ assert.equal(fixture.networkCalls.length, 0);
+ assert.equal((await fixture.store.listOperations('chef-a')).length, 0);
+ assert.equal(fixture.data.labels.length, 0);
+});
+
+test('a rejected local test token refreshes once and keeps the same test key', async () => {
+ const fixture = application({autoLocal: true});
+ const requests = [];
+ let sessionCalls = 0;
+ fixture.client.localFetch = async (path, options = {}) => {
+  if (path === '/v1/session') { sessionCalls++; return detectedUsbSession({token: sessionCalls === 1 ? 'expired-local-token' : 'local-bridge-token'}); }
+  assert.equal(path, '/v1/test-print');
+  const body = JSON.parse(options.body);
+  requests.push({body, token: options.headers['X-Kivra-Local-Token']});
+  if (requests.length === 1) throw Object.assign(Error('Local token expired'), {status: 401});
+  return {idempotencyKey: body.idempotencyKey, printJobId: 'test-job', status: 'Printed'};
+ };
+
+ await fixture.client.testLocal(fixture.data.printers[0]);
+
+ assert.equal(sessionCalls, 2, 'one initial connection plus one refresh after a definite 401 rejection');
+ assert.equal(requests.length, 2);
+ assert.equal(requests[0].token, 'expired-local-token');
+ assert.equal(requests[1].token, 'local-bridge-token');
+ assert.deepEqual(requests[0].body, requests[1].body);
+ assert.equal(fixture.networkCalls.length, 0);
+ assert.equal((await fixture.store.listOperations('chef-a')).length, 0);
+});
+
+test('required local mode saves a new USB label locally when initial discovery is unavailable', async () => {
+ const fixture = application({autoLocal: true, requireLocal: true});
+ const paths = [];
+ fixture.client.localFetch = async path => { paths.push(path); throw disconnected(); };
+
+ const result = await fixture.client.request('/api/labels/print', write(printBody()));
+
+ assert.equal(result.status, 'OfflinePending');
+ assert.equal(result.requiresReview, true);
+ assert.equal(fixture.networkCalls.length, 0);
+ assert.ok(paths.every(path => path === '/v1/session'), 'no print endpoint can be dispatched before connecting');
+ const saved = (await fixture.store.listOperations('chef-a'))[0];
+ assert.equal(saved.type, 'local-print');
+ assert.equal(saved.localRequest.printerId, 'printer-1');
+ assert.equal(saved.localRequest.idempotencyKey, saved.id);
+});
+
+test('a pending local test survives a reload with its original key and stock settings', async () => {
+ const first = application({autoLocal: true});
+ let original;
+ first.client.localFetch = async (path, options = {}) => {
+  if (path === '/v1/session') return detectedUsbSession();
+  original = JSON.parse(options.body);
+  throw disconnected();
+ };
+ await assert.rejects(first.client.testLocal(first.data.printers[0]), /interrupted/);
+ assert.deepEqual(first.localTests.get('chef-a:printer-1'), original);
+
+ const updated = snapshot();
+ updated.printers[0].labelWidthMm = 80;
+ const reloaded = application({snapshot: updated, autoLocal: true, localTests: first.localTests});
+ let retry;
+ reloaded.client.localFetch = async (path, options = {}) => {
+  if (path === '/v1/session') return detectedUsbSession();
+  retry = JSON.parse(options.body);
+  return {idempotencyKey: retry.idempotencyKey, status: 'Printed', idempotent: true};
+ };
+
+ await reloaded.client.testLocal(reloaded.data.printers[0]);
+
+ assert.deepEqual(retry, original, 'changing current stock settings must not turn receipt recovery into another physical test');
+ assert.equal(reloaded.localTests.has('chef-a:printer-1'), false);
+ assert.equal(reloaded.networkCalls.length, 0);
+ assert.equal(reloaded.data.labels.length, 0);
+});
+
+test('pending local test recovery remains isolated from another signed-in account', async () => {
+ const fixture = application({autoLocal: true});
+ const requests = [];
+ fixture.client.localFetch = async (path, options = {}) => {
+  if (path === '/v1/session') return detectedUsbSession();
+  const body = JSON.parse(options.body);
+  requests.push(body);
+  if (requests.length === 1) throw disconnected();
+  return {idempotencyKey: body.idempotencyKey, status: 'Printed'};
+ };
+ await assert.rejects(fixture.client.testLocal(fixture.data.printers[0]), /interrupted/);
+
+ fixture.switchAccount();
+ await fixture.client.testLocal(fixture.data.printers[0]);
+
+ assert.notEqual(requests[1].idempotencyKey, requests[0].idempotencyKey);
+ assert.deepEqual(fixture.localTests.get('chef-a:printer-1'), requests[0]);
+ assert.equal(fixture.localTests.has('chef-b:printer-1'), false);
+ assert.equal(fixture.networkCalls.length, 0);
+ assert.equal((await fixture.store.listOperations('chef-b')).length, 0);
+});
+
+test('changing accounts during a physical local test retains its pending recovery under the original account', {timeout: 5000}, async () => {
+ const fixture = application({autoLocal: true}), entered = deferred(), gate = deferred();
+ let original;
+ fixture.client.localFetch = async (path, options = {}) => {
+  if (path === '/v1/session') return detectedUsbSession();
+  original = JSON.parse(options.body);
+  entered.resolve();
+  return gate.promise;
+ };
+ const pending = fixture.client.testLocal(fixture.data.printers[0]).catch(error => error);
+ await entered.promise;
+ fixture.switchAccount();
+ gate.resolve({idempotencyKey: original.idempotencyKey, status: 'Printed'});
+ const error = await pending;
+
+ assert.equal(error.code, 'ACCOUNT_CHANGED');
+ assert.deepEqual(fixture.localTests.get('chef-a:printer-1'), original);
+ assert.equal(fixture.localTests.has('chef-b:printer-1'), false);
+ assert.equal(fixture.networkCalls.length, 0);
+});
+
+test('a repeated local token rejection cannot refresh and retry indefinitely', async () => {
+ const fixture = application({autoLocal: true});
+ let sessionCalls = 0, printCalls = 0;
+ fixture.client.localFetch = async path => {
+  if (path === '/v1/session') { sessionCalls++; return detectedUsbSession(); }
+  assert.equal(path, '/v1/test-print');
+  printCalls++;
+  throw Object.assign(Error('Local token expired'), {status: 401});
+ };
+
+ await assert.rejects(fixture.client.testLocal(fixture.data.printers[0]), error => error.status === 401);
+
+ assert.equal(sessionCalls, 2);
+ assert.equal(printCalls, 2);
+ assert.equal(fixture.networkCalls.length, 0);
+ assert.equal(fixture.localTests.has('chef-a:printer-1'), true);
 });

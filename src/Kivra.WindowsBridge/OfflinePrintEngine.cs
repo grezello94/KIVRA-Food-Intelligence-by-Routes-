@@ -48,6 +48,15 @@ internal sealed record LocalPrintResult(
     string IdempotencyKey, Guid LabelId, string LabelCode, Guid PrintJobId,
     string Status, string? FailureReason, bool Idempotent, OfflinePrintReceipt Receipt);
 
+internal sealed record LocalTestPrintRequest(string IdempotencyKey, LocalPrinterSettings Printer, string RestaurantTimeZoneId = "UTC");
+
+internal sealed record LocalTestPrintReceipt(
+    LocalTestPrintRequest Request, string RequestHash, Guid PrintJobId, string Status,
+    DateTimeOffset? PrintedAt, string Payload, string? FailureReason);
+
+internal sealed record LocalTestPrintResult(
+    string IdempotencyKey, Guid PrintJobId, string Status, string? FailureReason, bool Idempotent);
+
 internal sealed class LocalPrintConflictException(string message) : Exception(message);
 
 // Receipts live on the printer PC, independently of browser storage. Persisting
@@ -59,6 +68,7 @@ internal sealed class OfflinePrintEngine
         Converters = { new JsonStringEnumConverter() }
     };
     readonly string jobsDirectory;
+    readonly string testJobsDirectory;
     readonly Func<string> queueName;
     readonly Func<string, byte[], string?> send;
     readonly SemaphoreSlim printGate;
@@ -70,13 +80,15 @@ internal sealed class OfflinePrintEngine
     {
         jobsDirectory = Path.Combine(dataDirectory, "offline-jobs");
         Directory.CreateDirectory(jobsDirectory);
+        testJobsDirectory = Path.Combine(dataDirectory, "test-print-jobs");
+        Directory.CreateDirectory(testJobsDirectory);
         this.queueName = queueName;
         this.send = send;
         this.printGate = printGate;
         this.clock = clock ?? TimeProvider.System;
     }
 
-    internal async Task<LocalPrintResult> PrintAsync(OfflinePrintRequest request, CancellationToken token)
+    internal async Task<LocalPrintResult> PrintAsync(OfflinePrintRequest request, CancellationToken token, string? expectedQueueName = null)
     {
         Validate(request);
         var hash = Hash(JsonSerializer.Serialize(request, JsonOptions));
@@ -90,6 +102,7 @@ internal sealed class OfflinePrintEngine
                     throw new LocalPrintConflictException("This print key already belongs to a different label request.");
                 return Result(Recover(prior), true);
             }
+            var selectedQueue = RequireExpectedQueue(expectedQueueName);
             var zone = TimeZoneInfo.FindSystemTimeZoneById(request.RestaurantTimeZoneId);
             var operational = (request.IsReprint ? request.OperationalDateTime : RestaurantOperationalDay.Resolve(request.OperationalDateTime, zone)).ToUniversalTime();
             var expiry = new ExpiryCalculator().Calculate(operational, request.ShelfLifeValue, request.ShelfLifeUnit, zone).ToUniversalTime();
@@ -110,10 +123,10 @@ internal sealed class OfflinePrintEngine
             var receipt = new OfflinePrintReceipt(request, hash, Guid.NewGuid(), "Sending", operational, expiry, null, payload, null);
             Save(receipt);
             // The selected Windows queue comes only from the installed bridge's
-            // configuration. Browser-supplied queue names are never accepted.
+            // validated configuration, never from an individual print request.
             try
             {
-                var error = await Task.Run(() => send(queueName(), Encoding.ASCII.GetBytes(payload)));
+                var error = await Task.Run(() => send(selectedQueue, Encoding.ASCII.GetBytes(payload)));
                 receipt = receipt with
                 {
                     Status = error is null ? "Printed" : "Failed",
@@ -148,6 +161,99 @@ internal sealed class OfflinePrintEngine
         }
         finally { printGate.Release(); }
     }
+
+    // Test labels use the same spool path and durable acceptance rules as food
+    // labels, but have their own receipts and never become food history records.
+    internal async Task<LocalTestPrintResult> TestPrintAsync(LocalTestPrintRequest request, CancellationToken token, string? expectedQueueName = null)
+    {
+        ValidateKey(request.IdempotencyKey);
+        ValidatePrinter(request.Printer);
+        var zone = TimeZoneInfo.FindSystemTimeZoneById(request.RestaurantTimeZoneId);
+        var hash = Hash(JsonSerializer.Serialize(request, JsonOptions));
+        await printGate.WaitAsync(token);
+        try
+        {
+            var prior = ReadTest(request.IdempotencyKey);
+            if (prior is not null)
+            {
+                if (!CryptographicOperations.FixedTimeEquals(Convert.FromHexString(prior.RequestHash), Convert.FromHexString(hash)))
+                    throw new LocalPrintConflictException("This test print key already belongs to a different request.");
+                return TestResult(RecoverTest(prior), true);
+            }
+            var selectedQueue = RequireExpectedQueue(expectedQueueName);
+            var now = clock.GetUtcNow();
+            var sample = new FoodLabel
+            {
+                LabelCode = "TEST-" + Hash(request.IdempotencyKey)[..12], ItemNameSnapshot = "KIVRA TEST LABEL",
+                CategorySnapshot = "System", ClassificationSnapshot = Classification.NotApplicable,
+                DateTerminologySnapshot = "TESTED", OperationalDateTime = now, ExpiryDateTime = now,
+                ShelfLifeRuleSnapshot = "Test", StorageLocationSnapshot = "PRINTER TEST"
+            };
+            var payload = generator.Generate(sample, request.Printer.ToPrinter(), zone);
+            var receipt = new LocalTestPrintReceipt(request, hash, Guid.NewGuid(), "Sending", null, payload, null);
+            SaveTest(receipt);
+            try
+            {
+                var error = await Task.Run(() => send(selectedQueue, Encoding.ASCII.GetBytes(payload)));
+                receipt = receipt with { Status = error is null ? "Printed" : "Failed", PrintedAt = error is null ? clock.GetUtcNow() : null, FailureReason = error };
+            }
+            catch (Exception ex)
+            {
+                receipt = receipt with { Status = "Uncertain", FailureReason = $"The printer response was interrupted. Check the test label before printing again. {ex.Message}" };
+            }
+            try { SaveTest(receipt); }
+            catch (IOException)
+            {
+                receipt = receipt with { Status = "Uncertain", FailureReason = "Could not save the printer receipt. Check the test label before printing again." };
+            }
+            return TestResult(receipt, false);
+        }
+        finally { printGate.Release(); }
+    }
+
+    internal async Task<LocalTestPrintResult?> GetTestAsync(string key, CancellationToken token)
+    {
+        ValidateKey(key);
+        await printGate.WaitAsync(token);
+        try
+        {
+            var receipt = ReadTest(key);
+            return receipt is null ? null : TestResult(RecoverTest(receipt), true);
+        }
+        finally { printGate.Release(); }
+    }
+
+    string RequireExpectedQueue(string? expectedQueueName)
+    {
+        // Called under the same gate used to change printer selection, after
+        // prior receipt recovery and before saving Sending or touching USB.
+        var selected = queueName();
+        if (expectedQueueName is not null && !selected.Equals(expectedQueueName, StringComparison.OrdinalIgnoreCase))
+            throw new LocalPrintConflictException("The selected USB printer changed. Open KIVRA printer settings and reconnect this PC's printer before printing.");
+        return selected;
+    }
+
+    LocalTestPrintReceipt RecoverTest(LocalTestPrintReceipt receipt)
+    {
+        if (receipt.Status != "Sending") return receipt;
+        receipt = receipt with { Status = "Uncertain", FailureReason = "The bridge stopped before confirming this test print. Check the physical label; this request will not print again automatically." };
+        SaveTest(receipt);
+        return receipt;
+    }
+
+    static LocalTestPrintResult TestResult(LocalTestPrintReceipt receipt, bool idempotent) => new(
+        receipt.Request.IdempotencyKey, receipt.PrintJobId, receipt.Status, receipt.FailureReason, idempotent);
+
+    LocalTestPrintReceipt? ReadTest(string key)
+    {
+        var path = TestJobPath(key);
+        if (!File.Exists(path)) return null;
+        return JsonSerializer.Deserialize<LocalTestPrintReceipt>(File.ReadAllText(path), JsonOptions)
+            ?? throw new IOException("The saved test print receipt cannot be read. Check the label before printing again.");
+    }
+
+    string TestJobPath(string key) => Path.Combine(testJobsDirectory, Hash(key) + ".json");
+    void SaveTest(LocalTestPrintReceipt receipt) => WriteDurable(TestJobPath(receipt.Request.IdempotencyKey), JsonSerializer.Serialize(receipt, JsonOptions));
 
     OfflinePrintReceipt Recover(OfflinePrintReceipt receipt)
     {
@@ -212,7 +318,12 @@ internal sealed class OfflinePrintEngine
         if (!Enum.IsDefined(request.ClassificationSnapshot) || !Enum.IsDefined(request.ShelfLifeUnit) || request.ShelfLifeValue < 1 || request.ShelfLifeValue > 100000)
             throw new ArgumentException("A valid food classification and shelf-life rule are required.");
         if (request.OperationalDateTime == default || string.IsNullOrWhiteSpace(request.RestaurantTimeZoneId)) throw new ArgumentException("The actual preparation time and restaurant time zone are required.");
-        var printer = request.Printer ?? throw new ArgumentException("Printer settings are required.");
+        ValidatePrinter(request.Printer);
+    }
+
+    static void ValidatePrinter(LocalPrinterSettings? printer)
+    {
+        if (printer is null) throw new ArgumentException("Printer settings are required.");
         if (printer.Driver != "TscTsplUsb" || !printer.Enabled) throw new ArgumentException("Local offline printing requires an enabled TSC USB printer.");
         if (printer.Dpi is not (203 or 300) || printer.LabelWidthMm < 20 || printer.LabelWidthMm > (printer.Dpi == 300 ? 105.7m : 108m) || printer.LabelHeightMm is < 10 or > 1000)
             throw new ArgumentException("The printer resolution or label size is invalid.");
